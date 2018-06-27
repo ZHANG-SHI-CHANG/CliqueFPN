@@ -24,7 +24,7 @@ class DataLoader:
         datas = []
         labels = []
         for i,file_name in enumerate(glob.glob( os.path.join(self.root,'*') )):
-            label = int(file_name.split('\\')[-1])
+            label = int(file_name.split('/')[-1])
             for j,image_name in enumerate(glob.glob( os.path.join(file_name,'*.png') )):
                 try:
                     datas.append(image_name)

@@ -223,7 +223,7 @@ class BatchGenerator():
                 max_anchor = None                
                 max_index  = -1
                 max_iou    = -1
-
+                print(obj)
                 #######################################################
                 #choose max iou anchor
                 shifted_box = BoundBox(0, 
@@ -249,9 +249,9 @@ class BatchGenerator():
                 #print('yolo{} size:{}'.format(max_index//3,[grid_h, grid_w]))
                 # determine the position of the bounding box on the grid
                 center_x = .5*(obj['xmin'] + obj['xmax'])
-                center_x = center_x / float(net_w) * grid_w # sigma(t_x) + c_x
+                center_x = (center_x / float(net_w)) * grid_w # sigma(t_x) + c_x
                 center_y = .5*(obj['ymin'] + obj['ymax'])
-                center_y = center_y / float(net_h) * grid_h # sigma(t_y) + c_y
+                center_y = (center_y / float(net_h)) * grid_h # sigma(t_y) + c_y
                 
                 # determine the sizes of the bounding box
                 w = np.log((obj['xmax'] - obj['xmin']) / float(max_anchor.xmax)) # t_w
@@ -307,6 +307,59 @@ class BatchGenerator():
         return self.net_h, self.net_w
     
     def _aug_image(self, instance, net_h, net_w,anchors):
+        def _constrain(min_v, max_v, value):
+            if value < min_v: return min_v
+            if value > max_v: return max_v
+            return value
+        
+        image_name = instance['filename']
+        image = cv2.imread(image_name)[:,:,::-1] # RGB image
+        
+        if image is None: print('Cannot find ', image_name)
+            
+        image_h, image_w, _ = image.shape
+        
+        im_sized = cv2.resize(image, (net_w, net_h))
+        
+        # randomly flip
+        flip = np.random.randint(2)
+        im_sized = random_flip(im_sized, flip)#随机翻转
+        
+        boxes = copy.deepcopy(instance['object'])
+
+        # randomize boxes' order
+        np.random.shuffle(boxes)
+
+        # correct sizes and positions
+        sx, sy = float(net_w)/image_w, float(net_h)/image_h
+        zero_boxes = []
+
+        for i in range(len(boxes)):
+            boxes[i]['xmin'] = int(_constrain(0, net_w, boxes[i]['xmin']*sx))
+            boxes[i]['xmax'] = int(_constrain(0, net_w, boxes[i]['xmax']*sx))
+            boxes[i]['ymin'] = int(_constrain(0, net_h, boxes[i]['ymin']*sy))
+            boxes[i]['ymax'] = int(_constrain(0, net_h, boxes[i]['ymax']*sy))
+
+            if boxes[i]['xmax'] <= boxes[i]['xmin'] or boxes[i]['ymax'] <= boxes[i]['ymin']:
+                zero_boxes += [i]
+                continue
+
+            if flip == 1:
+                swap = boxes[i]['xmin'];
+                boxes[i]['xmin'] = net_w - boxes[i]['xmax']
+                boxes[i]['xmax'] = net_w - swap
+
+        boxes = [boxes[i] for i in range(len(boxes)) if i not in zero_boxes]
+        
+        _anchors = copy.deepcopy(anchors)
+        for i,anchor in enumerate(anchors):
+            _anchors[i].xmin = int(_constrain(0, net_w,anchor.xmin*sx))
+            _anchors[i].xmax = int(_constrain(0, net_w,anchor.xmax*sx))
+            _anchors[i].ymin = int(_constrain(0, net_h,anchor.ymin*sy))
+            _anchors[i].ymax = int(_constrain(0, net_h,anchor.ymax*sy))
+        return im_sized, boxes, _anchors
+    '''
+    def _aug_image(self, instance, net_h, net_w,anchors):
         image_name = instance['filename']
         image = cv2.imread(image_name)[:,:,::-1] # RGB image
         
@@ -335,7 +388,7 @@ class BatchGenerator():
         im_sized = apply_random_scale_and_crop(image, new_w, new_h, net_w, net_h, dx, dy)#尺度并补0或剪切到网络尺寸，dx,dy补到或剪切图像左侧和上侧
         
         # randomly distort hsv space
-        im_sized = random_distort_image(im_sized)#随机改变像素
+        #im_sized = random_distort_image(im_sized)#随机改变像素
         
         # randomly flip
         flip = np.random.randint(2)
@@ -345,7 +398,7 @@ class BatchGenerator():
         all_objs,anchors = correct_bounding_boxes(instance['object'],anchors, new_w, new_h, net_w, net_h, dx, dy, flip, image_w, image_h)#把box调整适应调整后的图像
         
         return im_sized, all_objs, anchors
-
+    '''
     def on_epoch_end(self):
         if self.shuffle: np.random.shuffle(self.instances)
             
@@ -542,7 +595,13 @@ if __name__=='__main__':
     
     count = 0
     for input_list,dummy_yolo in train_generator.next():
-        print(input_list[3].any())
-        print(count)
-        count+=1
+        x_batch, anchors_batch,t_batch, yolo_1, yolo_2, yolo_3 = input_list
+        print(yolo_1.shape)
         
+        image = x_batch[0,:,:,:].astype(np.uint8)[:,:,::-1]
+        cv2.namedWindow('test',cv2.WINDOW_NORMAL)
+        cv2.imshow('test',image)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+        
+        break
