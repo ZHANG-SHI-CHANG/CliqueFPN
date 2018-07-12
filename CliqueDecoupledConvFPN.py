@@ -11,7 +11,7 @@ class CliqueFPN():
     MEAN = [103.94, 116.78, 123.68]
     NORMALIZER = 0.017
     
-    def __init__(self,num_classes,num_anchors,batch_size,max_box_per_image,max_grid,ignore_thresh=0.6,learning_rate=0.000001):
+    def __init__(self,num_classes,num_anchors,batch_size,max_box_per_image,max_grid,ignore_thresh=0.6,learning_rate=0.0004):
         self.num_classes = num_classes
         self.num_anchors = num_anchors
         self.batch_size = batch_size
@@ -23,7 +23,7 @@ class CliqueFPN():
         self.__build()
     
     def __build(self):
-        self.norm = 'batch_norm'#group_norm,batch_norm
+        self.norm = 'group_norm'#group_norm,batch_norm
         self.activate = 'prelu'#selu,leaky,swish,relu,relu6,prelu
         self.num_block = {'1':4,'2':6,'3':6,'4':6}
         self.K = {'1':48,'2':48,'3':48,'4':48}
@@ -268,7 +268,7 @@ class CliqueFPN():
                 
                 update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
                 with tf.control_dependencies(update_ops):
-                    learning_rate = tf.train.exponential_decay(self.learning_rate,global_step=self.global_epoch_tensor,decay_steps=5,decay_rate=0.98,staircase=True)
+                    learning_rate = tf.train.exponential_decay(self.learning_rate,global_step=self.global_epoch_tensor,decay_steps=5,decay_rate=0.9995,staircase=True)
                     self.optimizer = tf.train.AdamOptimizer(learning_rate)
                     self.train_op = self.optimizer.minimize(self.all_loss)
                 
@@ -291,7 +291,7 @@ class CliqueFPN():
                 
                 update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
                 with tf.control_dependencies(update_ops):
-                    learning_rate = tf.train.exponential_decay(self.learning_rate,global_step=self.global_epoch_tensor,decay_steps=5,decay_rate=0.98,staircase=True)
+                    learning_rate = tf.train.exponential_decay(self.learning_rate,global_step=self.global_epoch_tensor,decay_steps=5,decay_rate=0.9995,staircase=True)
                     self.optimizer = tf.train.AdamOptimizer(learning_rate)
                     self.train_op = self.optimizer.minimize(self.all_loss)
                 
@@ -494,11 +494,11 @@ class CliqueFPN():
         xywh_scale = tf.exp(true_box_wh) * anchors / net_factor                     #(none,grid_h,grid_w,3,2)
         xywh_scale = tf.expand_dims(2 - xywh_scale[..., 0] * xywh_scale[..., 1], axis=4) #(none,grid_h,grid_w,3,1) 真值框尺寸越小，scale越大
 
-        xy_delta    = scale*1*xywh_mask   * (pred_box_xy-true_box_xy) * xywh_scale                          #(none,grid_h,grid_w,3,2) 计算唯一标记框的预测和真值xy偏差
-        wh_delta    = scale*1*xywh_mask   * (pred_box_wh-true_box_wh) * xywh_scale                          #(none,grid_h,grid_w,3,2) 计算唯一标记框的预测和真值wh偏差
+        xy_delta    = scale*3*xywh_mask   * (pred_box_xy-true_box_xy) * xywh_scale                          #(none,grid_h,grid_w,3,2) 计算唯一标记框的预测和真值xy偏差
+        wh_delta    = scale*4*xywh_mask   * (pred_box_wh-true_box_wh) * xywh_scale                          #(none,grid_h,grid_w,3,2) 计算唯一标记框的预测和真值wh偏差
         conf_delta_obj = scale*5*object_mask*(pred_box_conf-true_box_conf)#(none,grid_h,grid_w,3,1) 计算唯一预测框的置信度偏差
         conf_delta_noobj = 1*no_object_mask*conf_delta*(1.3-1.0*count_noobj/(count+count_noobj))#(none,grid_h,grid_w,3,1) 计算非唯一预测框的置信度偏差
-        class_delta = scale*1*object_mask * tf.expand_dims(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=true_box_class, logits=pred_box_class), 4)
+        class_delta = scale*3*object_mask * tf.expand_dims(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=true_box_class, logits=pred_box_class), 4)
                                                       #(none,grid_h,grid_w,3,num_classes) 计算唯一标记框的分类偏差
         #conf_delta_obj = focal_loss(tf.reshape(pred_box_conf,[tf.shape(pred_box_conf)[0],-1,1]),tf.reshape(true_box_conf,[tf.shape(true_box_conf)[0],-1,1]))
         #conf_delta_obj = 5*object_mask*tf.reshape(conf_delta_obj,tf.concat([tf.shape(pred_box_conf)[:-1],[-1]],axis=-1))
@@ -644,12 +644,15 @@ def PrimaryConv(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_t
     with tf.variable_scope(name):
         #none,none,none,3
         x = _conv_block('conv_0',x,64,3,2,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
-        x = _conv_block('conv_1',x,64,3,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
-        x = _conv_block('conv_2',x,128,3,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,128
+
+        x0 = _conv_block('conv_1',x,64,3,2,'SAME',use_decoupled,norm,activate,is_training)#none,none/4,none/4,32
+        x0 = _conv_block('conv_2',x0,128,3,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/4,none/4,128
         
-        x = tf.nn.max_pool(x,[1,4,4,1],[1,2,2,1],'SAME')
+        x = _conv_block('conv_3',x,64,3,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,32
+        x = _conv_block('conv_4',x,128,3,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
+        x = tf.nn.max_pool(x,[1,3,3,1],[1,2,2,1],'SAME')
         
-        return x
+        return x+x0
 ##_B_deform_conv
 def _B_deform_conv(name,x,num_filters=16,kernel_size=3,stride=1,offect=3,padding='SAME',use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
@@ -1013,17 +1016,10 @@ class VarianceScaling():
           return random_ops.random_uniform(shape, -limit, limit,
                                            dtype, seed=self.seed)
 ##group_norm
-def _max_divisible(input,max=1):
-    for i in range(1,max+1)[::-1]:
-        if input%i==0:
-            return i
-def group_norm(x, eps=1e-5, name='group_norm') :
+def group_norm(x, eps=1e-5, name='group_norm'):
     with tf.variable_scope(name):
         _, _, _, C = x.get_shape().as_list()
-        G = _max_divisible(C,max=C//2+1)
-        G = min(G, C)
-        if C%32==0:
-            G = min(G,32)
+        G = C//8
         
         #group_list = tf.split(tf.expand_dims(x,axis=3),num_or_size_splits=G,axis=4)#[(none,none,none,1,C//G),...]
         #x = tf.concat(group_list,axis=3)#none,none,none,G,C//G

@@ -5,7 +5,6 @@ import numpy as np
 import cv2
 
 from CliqueDecoupledConvFPN import CliqueFPN,Detection_or_Classifier
-#from CliqueDeformConvFPN import CliqueFPN,Detection_or_Classifier
 
 from detection_dataloader import create_training_instances,BatchGenerator
 from classifier_dataloader import DataLoader
@@ -24,7 +23,7 @@ def get_num_params():
 
 num_epochs = 10000
 max_to_keep = 2
-save_model_every = 3
+save_model_every = 100
 test_every = 1
 
 is_train = True
