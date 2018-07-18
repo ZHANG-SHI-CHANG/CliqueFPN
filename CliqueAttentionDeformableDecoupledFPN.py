@@ -23,10 +23,10 @@ class CliqueFPN():
         self.__build()
     
     def __build(self):
-        self.norm = 'group_norm'#group_norm,batch_norm
+        self.norm = 'batch_norm'#group_norm,batch_norm
         self.activate = 'prelu'#selu,leaky,swish,relu,relu6,prelu
-        self.num_block = {'1':6,'2':7,'3':7,'4':7}
-        self.K = {'1':48,'2':48,'3':48,'4':48}
+        self.num_block = {'0':3,'1':4,'2':6,'3':6,'4':6}
+        self.K = {'0':48,'1':48,'2':48,'3':48,'4':48}
     
         self.__init_global_epoch()
         self.__init_global_step()
@@ -48,33 +48,41 @@ class CliqueFPN():
         with tf.variable_scope('zsc_feature'):
             #none,none,none,3
             x0 = PrimaryConv('PrimaryConv',x,True,self.norm,self.activate,self.is_training)
-            #none,none/4,none/4,K['1']
+            #none,none/2,none/2,64
             
-            x = CliqueBlock('CliqueBlock_1',x0,self.num_block['1'],self.K['1'],True,True,self.norm,self.activate,self.is_training,False)
+            x = CliqueBlock('CliqueBlock_0',x0,self.num_block['0'],self.K['0'],True,self.norm,self.activate,self.is_training,False)
+            #none,none/2,none/2,K['0']*num_block['0']
+            skip_0 = tf.concat([x0,x],axis=-1)
+            # none,none/2,none/2,K['0']*(num_block['0']+1)
+            x0 = Transition('Transition_0',skip_0,True,self.norm,self.activate,self.is_training)
+            #none,none/4,none/4,K['0']*num_block['0']
+            
+            x = CliqueBlock('CliqueBlock_1',x0,self.num_block['1'],self.K['1'],True,self.norm,self.activate,self.is_training,True)
             #none,none/4,none/4,K['1']*num_block['1']
             skip_1 = tf.concat([x0,x],axis=-1)
             # none,none/4,none/4,K['1']*(num_block['1']+1)
-            x0 = Transition('Transition_1',skip_1,True,True,self.norm,self.activate,self.is_training)
+            x0 = Transition('Transition_1',skip_1,True,self.norm,self.activate,self.is_training)
             #none,none/8,none/8,K['1']*num_block['1']
             
-            x = CliqueBlock('CliqueBlock_2',x0,self.num_block['2'],self.K['2'],True,True,self.norm,self.activate,self.is_training,True)
+            x = CliqueBlock('CliqueBlock_2',x0,self.num_block['2'],self.K['2'],True,self.norm,self.activate,self.is_training,True)
             #none,none/8,none/8,K['2']*num_block['2']
             skip_2 = tf.concat([x0,x],axis=-1)
             #none,none/8,none/8,K['2']*(num_block['2']+1)
-            x0 = Transition('Transition_2',skip_2,True,True,self.norm,self.activate,self.is_training)
+            x0 = Transition('Transition_2',skip_2,True,self.norm,self.activate,self.is_training)
             #none,none/16,none/16,K['2']*num_block['2']
             
-            x = CliqueBlock('CliqueBlock_3',x0,self.num_block['3'],self.K['3'],True,True,self.norm,self.activate,self.is_training,True)
+            x = CliqueBlock('CliqueBlock_3',x0,self.num_block['3'],self.K['3'],True,self.norm,self.activate,self.is_training,True)
             #none,none/16,none/16,K['3']*num_block['3']
             skip_3 = tf.concat([x0,x],axis=-1)
             #none,none/16,none/16,K['3']*(num_block['3']+1)
-            x0 = Transition('Transition_3',skip_3,True,True,self.norm,self.activate,self.is_training)
+            x0 = Transition('Transition_3',skip_3,True,self.norm,self.activate,self.is_training)
             #none,none/32,none/32,K['3']*num_block['3']
             
-            x = CliqueBlock('CliqueBlock_4',x0,self.num_block['4'],self.K['4'],True,True,self.norm,self.activate,self.is_training,True)
+            x = CliqueBlock('CliqueBlock_4',x0,self.num_block['4'],self.K['4'],True,self.norm,self.activate,self.is_training,True)
             #none,none/32,none/32,K['4']*num_block['4']
             skip_4 = tf.concat([x0,x],axis=-1)
             #none,none/32,none/32,K['4']*(num_block['4']+1)
+        self.out = skip_3
         
         if Detection_or_Classifier=='classifier':
             with tf.variable_scope('zsc_classifier'):
@@ -83,42 +91,43 @@ class CliqueFPN():
                 global_pool_3 = tf.reduce_mean(skip_3,[1,2],keep_dims=True)
                 global_pool_4 = tf.reduce_mean(skip_4,[1,2],keep_dims=True)
                 global_pool = tf.concat([global_pool_1,global_pool_2,global_pool_3,global_pool_4],axis=-1)
-                self.classifier_logits = tf.reshape(_conv_block('Logits',global_pool,self.num_classes,1,1,'SAME',False,False,self.norm,self.activate,self.is_training),
+                self.classifier_logits = tf.reshape(_conv_block('Logits',global_pool,self.num_classes,1,1,'SAME',False,self.norm,self.activate,self.is_training),
                                                     [tf.shape(global_pool)[0],self.num_classes])
         elif Detection_or_Classifier=='detection':
             with tf.variable_scope('zsc_detection'):
                 with tf.variable_scope('zsc_conv_transpose'):
-                    x = _B_conv_block('Conv_1',skip_4,skip_4.get_shape().as_list()[-1]//2,1,1,'SAME',False,True,self.norm,self.activate,self.is_training)
-                    x = _B_conv_block('Conv_2',x,skip_4.get_shape().as_list()[-1]//2,3,1,'SAME',False,True,self.norm,self.activate,self.is_training)
-                    x = _B_conv_block('Conv_3',x,skip_4.get_shape().as_list()[-1],1,1,'SAME',False,True,self.norm,self.activate,self.is_training)
+                    x = _B_conv_block('Conv_1',skip_4,skip_4.get_shape().as_list()[-1]//2,1,1,'SAME',False,self.norm,self.activate,self.is_training)
+                    x = _B_conv_block('Conv_2',x,skip_4.get_shape().as_list()[-1]//2,3,1,'SAME',False,self.norm,self.activate,self.is_training)
+                    x = _B_conv_block('Conv_3',x,skip_4.get_shape().as_list()[-1],1,1,'SAME',False,self.norm,self.activate,self.is_training)
                     pred1_x = x
                     
                     x = tf.depth_to_space(x,2)
                     x = tf.concat([x,skip_3],axis=-1)
-                    x = _B_conv_block('Conv_5',x,skip_3.get_shape().as_list()[-1]//2,1,1,'SAME',False,True,self.norm,self.activate,self.is_training)
-                    x = _B_conv_block('Conv_6',x,skip_3.get_shape().as_list()[-1]//2,3,1,'SAME',False,True,self.norm,self.activate,self.is_training)
-                    x = _B_conv_block('Conv_7',x,skip_3.get_shape().as_list()[-1],1,1,'SAME',False,True,self.norm,self.activate,self.is_training)
+                    x = _B_conv_block('Conv_5',x,skip_3.get_shape().as_list()[-1]//2,1,1,'SAME',False,self.norm,self.activate,self.is_training)
+                    x = _B_conv_block('Conv_6',x,skip_3.get_shape().as_list()[-1]//2,3,1,'SAME',False,self.norm,self.activate,self.is_training)
+                    x = _B_conv_block('Conv_7',x,skip_3.get_shape().as_list()[-1],1,1,'SAME',False,self.norm,self.activate,self.is_training)
                     pred2_x = x
                     
                     x = tf.depth_to_space(x,2)
                     x = tf.concat([x,skip_2],axis=-1)
-                    x = _B_conv_block('Conv_9',x,skip_2.get_shape().as_list()[-1]//2,1,1,'SAME',False,True,self.norm,self.activate,self.is_training)
-                    x = _B_conv_block('Conv_10',x,skip_2.get_shape().as_list()[-1]//2,3,1,'SAME',False,True,self.norm,self.activate,self.is_training)
-                    x = _B_conv_block('Conv_11',x,skip_2.get_shape().as_list()[-1],1,1,'SAME',False,True,self.norm,self.activate,self.is_training)
+                    x = _B_conv_block('Conv_9',x,skip_2.get_shape().as_list()[-1]//2,1,1,'SAME',False,self.norm,self.activate,self.is_training)
+                    x = _B_conv_block('Conv_10',x,skip_2.get_shape().as_list()[-1]//2,3,1,'SAME',False,self.norm,self.activate,self.is_training)
+                    x = _B_conv_block('Conv_11',x,skip_2.get_shape().as_list()[-1],1,1,'SAME',False,self.norm,self.activate,self.is_training)
                     pred3_x = x
                     
                 with tf.variable_scope('zsc_pred'):
                     #pred1_x = Attention('Attention_1',pred1_x,False,self.norm,self.activate,self.is_training)
-                    self.pred_yolo_1 = _B_conv_block('Conv_1',pred1_x,self.num_anchors*(5+self.num_classes),1,1,'SAME',False,True,self.norm,self.activate,self.is_training)
+                    self.pred_yolo_1 = _B_conv_block('Conv_1',pred1_x,self.num_anchors*(5+self.num_classes),1,1,'SAME',False,self.norm,self.activate,self.is_training)
                     #none,none/32,none/32,5*(5+self.num_classes)
                     
                     #pred2_x = Attention('Attention_2',pred2_x,False,self.norm,self.activate,self.is_training)
-                    self.pred_yolo_2 = _B_conv_block('Conv_2',pred2_x,self.num_anchors*(5+self.num_classes),1,1,'SAME',False,True,self.norm,self.activate,self.is_training)
+                    self.pred_yolo_2 = _B_conv_block('Conv_2',pred2_x,self.num_anchors*(5+self.num_classes),1,1,'SAME',False,self.norm,self.activate,self.is_training)
                     #none,none/16,none/16,5*(5+self.num_classes)
                     
                     #pred3_x = Attention('Attention_3',pred3_x,False,self.norm,self.activate,self.is_training)
-                    self.pred_yolo_3 = _B_conv_block('Conv_3',pred3_x,self.num_anchors*(5+self.num_classes),1,1,'SAME',False,True,self.norm,self.activate,self.is_training)
+                    self.pred_yolo_3 = _B_conv_block('Conv_3',pred3_x,self.num_anchors*(5+self.num_classes),1,1,'SAME',False,self.norm,self.activate,self.is_training)
                     #none,none/8,none/8,5*(5+self.num_classes)
+            
         self.__init__output()
         
         if Detection_or_Classifier=='classifier':
@@ -376,12 +385,12 @@ class CliqueFPN():
         ###################
         ###################
         #snip
-        true_min_wh = tf.minimum(true_wh[...,0],true_wh[...,1])#none,1,1,1,max_box_per_image
-        snip_mask = tf.cast(true_min_wh>tf.expand_dims(anchors_min_wh,4)*2/3,
-                            tf.float32)*tf.cast(true_min_wh<tf.expand_dims(anchors_max_wh,4)*1.5,tf.float32)#none,1,1,1,max_box_per_image
-        snip_mask = tf.expand_dims(snip_mask,-1)#none,1,1,1,max_box_per_image,1
-        true_wh = snip_mask*true_wh#none,1,1,1,max_box_per_image,2
-        true_xy = snip_mask*true_xy#none,1,1,1,max_box_per_image,2
+        #true_min_wh = tf.minimum(true_wh[...,0],true_wh[...,1])#none,1,1,1,max_box_per_image
+        #snip_mask = tf.cast(true_min_wh>tf.expand_dims(anchors_min_wh,4)*2/3,
+        #                    tf.float32)*tf.cast(true_min_wh<tf.expand_dims(anchors_max_wh,4)*1.5,tf.float32)#none,1,1,1,max_box_per_image
+        #snip_mask = tf.expand_dims(snip_mask,-1)#none,1,1,1,max_box_per_image,1
+        #true_wh = snip_mask*true_wh#none,1,1,1,max_box_per_image,2
+        #true_xy = snip_mask*true_xy#none,1,1,1,max_box_per_image,2
         ###################
         ###################
         '''
@@ -423,25 +432,25 @@ class CliqueFPN():
         ###################
         ###################
         #snip
-        true_min_wh = tf.minimum(true_wh[...,0],true_wh[...,1])#none,grid_h,grid_w,3
-        anchors_min_wh = tf.tile(anchors_min_wh,[1,grid_h,grid_w,self.num_anchors])
-        anchors_max_wh = tf.tile(anchors_max_wh,[1,grid_h,grid_w,self.num_anchors])
-        snip_mask = tf.cast(true_min_wh>anchors_min_wh*2/3,
-                            tf.float32)*tf.cast(true_min_wh<anchors_max_wh*1.5,tf.float32)#none,grid_h,grid_w,3
-        snip_mask = tf.expand_dims(snip_mask,-1)#none,grid_h,grid_w,3,1
-        true_xy = snip_mask*true_xy#none,grid_h,grid_w,3,2
-        true_wh = snip_mask*true_wh#none,grid_h,grid_w,3,2
-        true_box_xy = snip_mask*true_box_xy#none,grid_h,grid_w,3,2
-        true_box_wh = snip_mask*true_box_wh#none,grid_h,grid_w,3,2
-        true_box_conf = snip_mask*true_box_conf#none,grid_h,grid_w,3,1
-        true_box_class = tf.cast(tf.squeeze(snip_mask,-1),tf.int64)*true_box_class#none,grid_h,grid_w,3
+        #true_min_wh = tf.minimum(true_wh[...,0],true_wh[...,1])#none,grid_h,grid_w,3
+        #anchors_min_wh = tf.tile(anchors_min_wh,[1,grid_h,grid_w,self.num_anchors])
+        #anchors_max_wh = tf.tile(anchors_max_wh,[1,grid_h,grid_w,self.num_anchors])
+        #snip_mask = tf.cast(true_min_wh>anchors_min_wh*2/3,
+        #                    tf.float32)*tf.cast(true_min_wh<anchors_max_wh*1.5,tf.float32)#none,grid_h,grid_w,3
+        #snip_mask = tf.expand_dims(snip_mask,-1)#none,grid_h,grid_w,3,1
+        #true_xy = snip_mask*true_xy#none,grid_h,grid_w,3,2
+        #true_wh = snip_mask*true_wh#none,grid_h,grid_w,3,2
+        #true_box_xy = snip_mask*true_box_xy#none,grid_h,grid_w,3,2
+        #true_box_wh = snip_mask*true_box_wh#none,grid_h,grid_w,3,2
+        #true_box_conf = snip_mask*true_box_conf#none,grid_h,grid_w,3,1
+        #true_box_class = tf.cast(tf.squeeze(snip_mask,-1),tf.int64)*true_box_class#none,grid_h,grid_w,3
         
-        pred_box_xy = snip_mask*pred_box_xy#none,grid_h,grid_w,3,2
-        pred_box_wh = snip_mask*pred_box_wh#none,grid_h,grid_w,3,2
-        pred_box_conf = snip_mask*pred_box_conf#none,grid_h,grid_w,3,1
-        pred_box_class = snip_mask*pred_box_class#none,grid_h,grid_w,3,2
+        #pred_box_xy = snip_mask*pred_box_xy#none,grid_h,grid_w,3,2
+        #pred_box_wh = snip_mask*pred_box_wh#none,grid_h,grid_w,3,2
+        #pred_box_conf = snip_mask*pred_box_conf#none,grid_h,grid_w,3,1
+        #pred_box_class = snip_mask*pred_box_class#none,grid_h,grid_w,3,2
         
-        object_mask = snip_mask*object_mask#none,grid_h,grid_w,3,1
+        #object_mask = snip_mask*object_mask#none,grid_h,grid_w,3,1
         ###################
         ###################
         '''
@@ -522,6 +531,7 @@ class CliqueFPN():
                                        tf.reduce_sum(class_delta)],  message='xy loss,wh loss,conf loss,un conf loss,class loss:\n',   summarize=1000)
 
         return loss,class_loss,recall50,recall75,avg_cat,avg_obj,avg_noobj,count,count_noobj
+        
     def __init_input(self):
         if Detection_or_Classifier=='classifier':
             with tf.variable_scope('input'):
@@ -555,13 +565,13 @@ class CliqueFPN():
 ################################################################################################################
 ################################################################################################################
 ##Clique_conv
-def CliqueBlock(name,x,num_block=6,num_filters=80,use_decoupled=True,use_coord=True,norm='group_norm',activate='selu',is_training=True,use_deformconv=True,loop=1):
+def CliqueBlock(name,x,num_block=6,num_filters=80,use_decoupled=True,norm='group_norm',activate='selu',is_training=True,use_deformconv=True,loop=1):
     with tf.variable_scope(name):
         FeatureList = []
         
         for i in range(num_block):
-            _x = _B_conv_block('_B_conv_{}_0'.format(i),x,num_filters,1,1,'SAME',use_decoupled,use_coord,norm,activate,is_training)
-            _x = _B_conv_block('_B_conv_{}_1'.format(i),_x,num_filters,3,1,'SAME',use_decoupled,use_coord,norm,activate,is_training)
+            _x = _B_conv_block('_B_conv_{}_0'.format(i),x,num_filters,1,1,'SAME',use_decoupled,norm,activate,is_training)
+            _x = _B_conv_block('_B_conv_{}_1'.format(i),_x,num_filters,3,1,'SAME',use_decoupled,norm,activate,is_training)
             x = tf.concat([x,_x],axis=-1)
             FeatureList.append(_x)#0,1,2,3,4,5
         x0 = tf.concat(FeatureList,axis=-1)
@@ -569,15 +579,15 @@ def CliqueBlock(name,x,num_block=6,num_filters=80,use_decoupled=True,use_coord=T
         with tf.variable_scope('loop'):
             for i in range(num_block):
                 del FeatureList[0]
-                _x = _B_conv_block('_II_B_conv_{}_0'.format(i),tf.concat(FeatureList,axis=-1),num_filters,1,1,'SAME',use_decoupled,use_coord,norm,activate,is_training)
+                _x = _B_conv_block('_II_B_conv_{}_0'.format(i),tf.concat(FeatureList,axis=-1),num_filters,1,1,'SAME',use_decoupled,norm,activate,is_training)
                 
                 if not use_deformconv:
-                    _x = _B_conv_block('_II_B_conv_{}_1'.format(i),_x,num_filters,3,1,'SAME',use_decoupled,use_coord,norm,activate,is_training)
+                    _x = _B_conv_block('_II_B_conv_{}_1'.format(i),_x,num_filters,3,1,'SAME',use_decoupled,norm,activate,is_training)
                 else:
                     if i==num_block-1:
-                        _x = _B_deform_conv('deform_conv',_x,num_filters,3,1,3,'SAME',use_decoupled,use_coord,norm,activate,is_training)
+                        _x = _B_deform_conv('deform_conv',_x,num_filters,3,1,3,'SAME',use_decoupled,norm,activate,is_training)
                     else:
-                        _x = _B_conv_block('_II_B_conv_{}_1'.format(i),_x,num_filters,3,1,'SAME',use_decoupled,use_coord,norm,activate,is_training)
+                        _x = _B_conv_block('_II_B_conv_{}_1'.format(i),_x,num_filters,3,1,'SAME',use_decoupled,norm,activate,is_training)
                 
                 FeatureList.append(_x)
         if loop>1:
@@ -585,15 +595,15 @@ def CliqueBlock(name,x,num_block=6,num_filters=80,use_decoupled=True,use_coord=T
                 with tf.variable_scope('loop',reuse=True):
                     for i in range(num_block):
                         del FeatureList[0]
-                        _x = _B_conv_block('_II_B_conv_{}_0'.format(i),tf.concat(FeatureList,axis=-1),num_filters,1,1,'SAME',use_decoupled,use_coord,norm,activate,is_training)
+                        _x = _B_conv_block('_II_B_conv_{}_0'.format(i),tf.concat(FeatureList,axis=-1),num_filters,1,1,'SAME',use_decoupled,norm,activate,is_training)
                         
                         if not use_deformconv:
-                            _x = _B_conv_block('_II_B_conv_{}_1'.format(i),_x,num_filters,3,1,'SAME',use_decoupled,use_coord,norm,activate,is_training)
+                            _x = _B_conv_block('_II_B_conv_{}_1'.format(i),_x,num_filters,3,1,'SAME',use_decoupled,norm,activate,is_training)
                         else:
                             if i==num_block-1:
-                                _x = _B_deform_conv('deform_conv',_x,num_filters,3,1,3,'SAME',use_decoupled,use_coord,norm,activate,is_training)
+                                _x = _B_deform_conv('deform_conv',_x,num_filters,3,1,3,'SAME',use_decoupled,norm,activate,is_training)
                             else:
-                                _x = _B_conv_block('_II_B_conv_{}_1'.format(i),_x,num_filters,3,1,'SAME',use_decoupled,use_coord,norm,activate,is_training)
+                                _x = _B_conv_block('_II_B_conv_{}_1'.format(i),_x,num_filters,3,1,'SAME',use_decoupled,norm,activate,is_training)
                         
                         FeatureList.append(_x)
             
@@ -601,40 +611,54 @@ def CliqueBlock(name,x,num_block=6,num_filters=80,use_decoupled=True,use_coord=T
         
         return x + x0
 ##Transition
-def Transition(name,x,use_decoupled=True,use_coord=True,norm='group_norm',activate='selu',is_training=True):
+def Transition(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
         C = x.get_shape().as_list()[-1]
         
-        x = _B_conv_block('_B_conv_block',x,C//2,1,1,'SAME',use_decoupled,use_coord,norm,activate,is_training)
+        x = _B_conv_block('_B_conv_block',x,C//2,1,1,'SAME',use_decoupled,norm,activate,is_training)
         
-        x = Attention('Attention',x,use_decoupled,use_coord,norm,activate,is_training)
+        x = Attention('Attention',x,False,norm,activate,is_training)
         
         x = tf.nn.max_pool(x,[1,2,2,1],[1,2,2,1],'SAME')
-        
+
         return x
+##Dpp
+def Dpp(name,Iq):
+    def lamda_1(x,lamda,eplice=1e-10):
+        return tf.pow(tf.sqrt(tf.pow(x,2.)+eplice*eplice),lamda)
+    def lamda_2(x,lamda,eplice=1e-10):
+        return tf.pow(tf.sqrt(tf.pow(tf.nn.relu(x),2.)+eplice*eplice),lamda)
+    with tf.variable_scope(name):
+        Ip = tf.nn.avg_pool(Iq,[1,2,2,1],[1,1,1,1],'SAME')
+
+        gaussian_filter = tf.truediv(tf.constant([[1,1,1],[1,2,1],[1,1,1]],dtype=tf.float32),16.0)
+        gaussian_filter = tf.reshape(gaussian_filter,[3,3,1,1])
+        gaussian_filter = tf.tile(gaussian_filter,[1,1,Ip.get_shape().as_list()[-1],Ip.get_shape().as_list()[-1]])
+        Ip = tf.nn.conv2d(Ip,gaussian_filter,[1,1,1,1],'SAME')
+        #gaussian_filter = tf.tile(gaussian_filter,[1,1,Ip.get_shape().as_list()[-1],1])
+        #Ip = tf.nn.depthwise_conv2d(Ip,gaussian_filter,[1,1,1,1],'SAME')
+
+        alpha = tf.Variable(0.0,trainable=True)
+        lamda = tf.Variable(1.0,trainable=True)
+        weight = alpha+lamda_2(Iq-Ip,lamda)
+        inverse_bilatera = Iq*weight
+
+        result = tf.truediv(tf.nn.avg_pool(inverse_bilatera,[1,2,2,1],[1,2,2,1],'SAME'),tf.nn.avg_pool(weight,[1,2,2,1],[1,2,2,1],'SAME'))
+        return result
 ##primary_conv
-def PrimaryConv(name,x,use_decoupled=True,use_coord=True,norm='group_norm',activate='selu',is_training=True):
+def PrimaryConv(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
         #none,none,none,3
-        x = _conv_block('conv_0',x,64,3,2,'SAME',use_decoupled,use_coord,norm,activate,is_training)#none,none/2,none/2,64
-
-        x0 = _conv_block('conv_1',x,32,3,2,'SAME',use_decoupled,use_coord,norm,activate,is_training)#none,none/4,none/4,32
-        x0 = _conv_block('conv_2',x0,64,1,1,'SAME',use_decoupled,use_coord,norm,activate,is_training)#none,none/4,none/4,128
+        x = _conv_block('conv_0',x,64,3,1,'SAME',use_decoupled,norm,activate,is_training)#none,none,none,32
+        x = _conv_block('conv_1',x,128,3,2,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
+        x = _conv_block('conv_2',x,64,1,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,32
+        x = _conv_block('conv_3',x,128,3,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
         
-        x = _conv_block('conv_3',x,32,3,1,'SAME',use_decoupled,use_coord,norm,activate,is_training)#none,none/2,none/2,32
-        x = _conv_block('conv_4',x,64,3,1,'SAME',use_decoupled,use_coord,norm,activate,is_training)#none,none/2,none/2,64
-        x = tf.nn.max_pool(x,[1,2,2,1],[1,2,2,1],'SAME')
-        
-        return tf.concat([x0,x],axis=-1)
+        return x
 ##_B_deform_conv
-def _B_deform_conv(name,x,num_filters=16,kernel_size=3,stride=1,offect=3,padding='SAME',use_decoupled=True,use_coord=True,norm='group_norm',activate='selu',is_training=True):
+def _B_deform_conv(name,x,num_filters=16,kernel_size=3,stride=1,offect=3,padding='SAME',use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
-        if norm=='batch_norm':
-            x = tf.layers.batch_normalization(x,training=is_training,epsilon=0.001,name='batch_norm')
-        elif norm=='group_norm':
-            x = group_norm(x,name='group_norm')
-        else:
-            pass
+        C = x.get_shape().as_list()[-1]
         if activate=='leaky':
             x = LeakyRelu(x,leak=0.1,name='leaky')
         elif activate=='selu':
@@ -648,11 +672,18 @@ def _B_deform_conv(name,x,num_filters=16,kernel_size=3,stride=1,offect=3,padding
         else:
             pass
         
-        x = _deform_conv('deform_conv',x,num_filters,kernel_size,stride,offect,padding,use_decoupled,use_coord,norm=None,activate=None,is_training=is_training)
+        if norm=='batch_norm':
+            x = bn(x, is_training, name='batch_norm')
+        elif norm=='group_norm':
+            x = group_norm(x,name='group_norm')
+        else:
+            pass
+        
+        x = _deform_conv('deform_conv',x,num_filters,kernel_size,stride,offect,padding,use_decoupled,norm=None,activate=None,is_training=is_training)
         
         return x
 ##_deform_conv
-def _deform_conv(name,x,num_filters=16,kernel_size=3,stride=1,offect=3,padding='SAME',use_decoupled=True,use_coord=True,norm='group_norm',activate='selu',is_training=True):
+def _deform_conv(name,x,num_filters=16,kernel_size=3,stride=1,offect=3,padding='SAME',use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
         _,_,_,C = x.shape.as_list()
         num_012 = tf.shape(x)[:3]
@@ -662,7 +693,7 @@ def _deform_conv(name,x,num_filters=16,kernel_size=3,stride=1,offect=3,padding='
         #offect_map = _conv_block('offect_conv',x,o_oc,offect,1,'SAME',None,None,is_training)#none,none,none,o_oc
         w = GetWeight('weight',[offect,offect,C,o_oc])
         bias = tf.get_variable('bias',o_oc,tf.float32,initializer=tf.constant_initializer(0.001))
-        offect_map = tf.nn.atrous_conv2d(x,w,3,'SAME','offect_conv') + bias
+        offect_map = tf.nn.atrous_conv2d(x,w,2,'SAME','offect_conv') + bias
         
         offect_map = kernel_size*2*(tf.nn.sigmoid(offect_map)-0.5)#kernel_size*tanh(x)
         
@@ -726,18 +757,14 @@ def _deform_conv(name,x,num_filters=16,kernel_size=3,stride=1,offect=3,padding='
         x_ip = tf.transpose(tf.reshape(x_ip,tf.concat([[C],num_012,[f_h,f_w]],axis=-1)), [1,2,4,3,5,0])#none,none,f_h,none,f_w,C
         x_ip = tf.reshape(x_ip,[num_012[0],num_012[1]*f_h,num_012[2]*f_w,C])#none,none*f_h,none*f_w,C
         
-        out = _B_conv_block('deform_conv',x_ip,num_filters,kernel_size,kernel_size*stride,'SAME',use_decoupled,use_coord,norm=norm,activate=activate,is_training=is_training)
+        out = _B_conv_block('deform_conv',x_ip,num_filters,kernel_size,kernel_size*stride,'SAME',use_decoupled,norm=norm,activate=activate,is_training=is_training)
         
         return out
 ##_B_conv_block
-def _B_conv_block(name,x,num_filters=16,kernel_size=3,stride=2,padding='SAME',use_decoupled=True,use_coord=True,norm='group_norm',activate='selu',is_training=True):
+def _B_conv_block(name,x,num_filters=16,kernel_size=3,stride=2,padding='SAME',use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
-        if norm=='batch_norm':
-            x = tf.layers.batch_normalization(x,training=is_training,epsilon=0.001,name='batch_norm')
-        elif norm=='group_norm':
-            x = group_norm(x,name='group_norm')
-        else:
-            pass
+        C = x.get_shape().as_list()[-1]
+        
         if activate=='leaky':
             x = LeakyRelu(x,leak=0.1,name='leaky')
         elif activate=='selu':
@@ -753,12 +780,16 @@ def _B_conv_block(name,x,num_filters=16,kernel_size=3,stride=2,padding='SAME',us
         else:
             pass
         
-        if use_coord:
-            x = CoordConv('coordconv',x)
+        if norm=='batch_norm':
+            x = bn(x, is_training, name='batch_norm')
+        elif norm=='group_norm':
+            x = group_norm(x,name='group_norm')
+        else:
+            pass
         
         input = x
         
-        w = GetWeight('weight',[kernel_size,kernel_size,x.get_shape().as_list()[-1],num_filters])
+        w = GetWeight('weight',[kernel_size,kernel_size,C,num_filters])
         x = tf.nn.conv2d(x,w,[1,stride,stride,1],padding,name='B_conv')
         
         if use_decoupled:
@@ -766,56 +797,45 @@ def _B_conv_block(name,x,num_filters=16,kernel_size=3,stride=2,padding='SAME',us
         
         return x
 ##_conv_block
-def _conv_block(name,input,num_filters=16,kernel_size=3,stride=2,padding='SAME',use_decoupled=True,use_coord=True,norm='group_norm',activate='selu',is_training=True):
+def _conv_block(name,input,num_filters=16,kernel_size=3,stride=2,padding='SAME',use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
-        if use_coord:
-            input = CoordConv('coordconv',input)
-        
         w = GetWeight('weight',[kernel_size,kernel_size,input.shape.as_list()[-1],num_filters])
         x = tf.nn.conv2d(input,w,[1,stride,stride,1],padding=padding,name='conv')
         
         if use_decoupled:
             x = DecoupledOperator('DecoupledOperator',x,input,w,stride)
         
+        if activate=='leaky': 
+            x = LeakyRelu(x,leak=0.1, name='leaky')
+        elif activate=='selu':
+            x = selu(x,name='selu')
+        elif activate=='swish':
+            x = swish(x,name='swish')
+        elif activate=='relu':
+            x = tf.nn.relu(x,name='relu')
+        elif activate=='relu6':
+            x = tf.nn.relu6(x,name='relu6')
+        elif activate=='prelu':
+            x = prelu(x,name='prelu')
+        else:
+            pass
+        
         if norm=='batch_norm':
-            x = tf.layers.batch_normalization(x, training=is_training, epsilon=0.001,name='batchnorm')
+            x = bn(x, is_training, name='batch_norm')
         elif norm=='group_norm':
             x = group_norm(x,name='groupnorm')
         else:
             b = tf.get_variable('bias',num_filters,tf.float32,initializer=tf.constant_initializer(0.001))
             x += b
-        if activate=='leaky': 
-            x = LeakyRelu(x,leak=0.1, name='leaky')
-        elif activate=='selu':
-            x = selu(x,name='selu')
-        elif activate=='swish':
-            x = swish(x,name='swish')
-        elif activate=='relu':
-            x = tf.nn.relu(x,name='relu')
-        elif activate=='relu6':
-            x = tf.nn.relu6(x,name='relu6')
-        elif activate=='prelu':
-            x = prelu(x,name='prelu')
-        else:
-            pass
 
         return x
 ##_B_group_conv with channel shuffle
-def _B_group_conv(name,x,group=4,num_filters=16,kernel_size=1,stride=1,padding='SAME',use_decoupled=True,use_coord=True,norm='group_norm',activate='selu',is_training=True):
+def _B_group_conv(name,x,group=4,num_filters=16,kernel_size=1,stride=1,padding='SAME',use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
-        if use_coord:
-            x = CoordConv('coordconv',x)
-        
         C = x.shape.as_list()[-1]
         num_012 = tf.shape(x)[:3]
         assert C%group==0 and num_filters%group==0
         
-        if norm=='batch_norm':
-            x = tf.layers.batch_normalization(x, training=is_training, epsilon=0.001,name='batchnorm')
-        elif norm=='group_norm':
-            x = group_norm(x,name='groupnorm')
-        else:
-            pass
         if activate=='leaky': 
             x = LeakyRelu(x,leak=0.1, name='leaky')
         elif activate=='selu':
@@ -828,6 +848,13 @@ def _B_group_conv(name,x,group=4,num_filters=16,kernel_size=1,stride=1,padding='
             x = tf.nn.relu6(x,name='relu6')
         elif activate=='prelu':
             x = prelu(x,name='prelu')
+        else:
+            pass
+        
+        if norm=='batch_norm':
+            x = bn(x, is_training, name='batch_norm')
+        elif norm=='group_norm':
+            x = group_norm(x,name='groupnorm')
         else:
             pass
         
@@ -846,19 +873,19 @@ def _B_group_conv(name,x,group=4,num_filters=16,kernel_size=1,stride=1,padding='
         
         return x
 ##Attention
-def Attention(name,x,use_decoupled=True,use_coord=True,norm='group_norm',activate='selu',is_training=True):
+def Attention(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
-        attention = SelfAttention('SelfAttention',x,use_decoupled,use_coord,norm,activate,is_training)
-        weight = SE('SE',x,use_decoupled,use_coord,norm,activate,is_training)
-        x = attention*(1+weight)
+        attention = SelfAttention('SelfAttention',x,use_decoupled,norm,activate,is_training)
+        weight = SE('SE',x,use_decoupled,norm,activate,is_training)
+        x = (x+attention)*(1+weight)
         return x
 ##selfattention
-def SelfAttention(name,x,use_decoupled=True,use_coord=True,norm='group_norm',activate='selu',is_training=True):
+def SelfAttention(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
         C = x.get_shape().as_list()[-1]
-        f = _B_conv_block('f',x,C//8,1,1,'SAME',use_decoupled,use_coord,norm,activate,is_training)
-        g = _B_conv_block('g',x,C//8,1,1,'SAME',use_decoupled,use_coord,norm,activate,is_training)
-        h = _B_conv_block('h',x,C,1,1,'SAME',use_decoupled,use_coord,norm,activate,is_training)
+        f = _B_conv_block('f',x,C//8,1,1,'SAME',use_decoupled,norm,activate,is_training)
+        g = _B_conv_block('g',x,C//8,1,1,'SAME',use_decoupled,norm,activate,is_training)
+        h = _B_conv_block('h',x,C,1,1,'SAME',use_decoupled,norm,activate,is_training)
         
         s = tf.matmul(tf.reshape(g,[tf.shape(g)[0],-1,tf.shape(g)[-1]]), tf.reshape(f,[tf.shape(f)[0],-1,tf.shape(f)[-1]]), transpose_b=True) # # [bs, N, N]
 
@@ -868,50 +895,22 @@ def SelfAttention(name,x,use_decoupled=True,use_coord=True,norm='group_norm',act
         gamma = tf.get_variable("gamma", [1], initializer=tf.constant_initializer(0.0))
 
         o = tf.reshape(o, tf.concat([tf.shape(x)[:3],[-1]],axis=-1)) # [bs, h, w, C]
-        x = gamma * o + x
+        x = gamma * o
         
         return x
 ##senet
-def SE(name,x,use_decoupled=True,use_coord=True,norm='group_norm',activate='selu',is_training=True):
+def SE(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
         #none,none,none,C
         C = x.get_shape().as_list()[-1]
         #SEnet channel attention
         weight_c = tf.reduce_mean(x,[1,2],keep_dims=True)#none,1,1,C
-        weight_c = _B_conv_block('conv_1',weight_c,C//16,1,1,'SAME',False,False,None,activate,is_training)
-        weight_c = _B_conv_block('conv_2',weight_c,C,1,1,'SAME',False,False,None,activate,is_training)
+        weight_c = _B_conv_block('conv_1',weight_c,C//16,1,1,'SAME',False,None,activate,is_training)
+        weight_c = _B_conv_block('conv_2',weight_c,C,1,1,'SAME',False,None,activate,is_training)
         
         weight_c = tf.nn.sigmoid(weight_c)#none,1,1,C
         
         return weight_c
-##CoordConv
-def CoordConv(name,x):
-    with tf.variable_scope(name):
-        batch_size_tensor = tf.shape(x)[0]
-        y_dim = tf.shape(x)[1]
-        x_dim = tf.shape(x)[2]
-        xx_ones = tf.ones([batch_size_tensor, x_dim],dtype=tf.int32)
-        xx_ones = tf.expand_dims(xx_ones, -1)
-        xx_range = tf.tile(tf.expand_dims(tf.range(x_dim), 0),[batch_size_tensor, 1])
-        xx_range = tf.expand_dims(xx_range, 1)
-        xx_channel = tf.matmul(xx_ones, xx_range)
-        xx_channel = tf.expand_dims(xx_channel, -1)
-        yy_ones = tf.ones([batch_size_tensor, y_dim],dtype=tf.int32)
-        yy_ones = tf.expand_dims(yy_ones, 1)
-        yy_range = tf.tile(tf.expand_dims(tf.range(y_dim), 0),[batch_size_tensor, 1])
-        yy_range = tf.expand_dims(yy_range, -1)
-        yy_channel = tf.matmul(yy_range, yy_ones)
-        yy_channel = tf.expand_dims(yy_channel, -1)
-        xx_channel = tf.cast(xx_channel, tf.float32) / (x_dim - 1)
-        yy_channel = tf.cast(yy_channel, tf.float32) / (y_dim - 1)
-        xx_channel = xx_channel*2 - 1
-        yy_channel = yy_channel*2 - 1
-        ret = tf.concat([x,xx_channel,yy_channel], axis=-1)
-        
-        if True:
-            rr = tf.sqrt( tf.square(xx_channel-0.5)+ tf.square(yy_channel-0.5) )
-            ret = tf.concat([ret, rr], axis=-1)
-        return ret
 ##decoupled conv
 def DecoupledOperator(name,conv,x,w,stride):
     print('use DecoupledOperator')
@@ -954,6 +953,9 @@ def GetWeight(name,shape,weights_decay = 0.00004):
 ##initializer
 from tensorflow.python.framework import dtypes
 from tensorflow.python.ops import random_ops
+from tensorflow.python.ops import control_flow_ops
+from tensorflow.python.training import moving_averages
+from tensorflow.python.ops import math_ops
 import math
 def glorot_uniform_initializer(seed=None, dtype=dtypes.float32):
     return VarianceScaling(scale=1.0,
@@ -1023,6 +1025,37 @@ class VarianceScaling():
           limit = math.sqrt(3.0 * scale)
           return random_ops.random_uniform(shape, -limit, limit,
                                            dtype, seed=self.seed)
+##batch_norm
+def bn(x, is_training, name='batchnorm'):
+    with tf.variable_scope(name):
+        decay = 0.99
+        epsilon = 1e-3
+        
+        size = x.shape.as_list()[-1]
+        
+        beta = tf.get_variable('beta', [size], initializer=tf.zeros_initializer())
+        scale = tf.get_variable('scale', [size], initializer=tf.ones_initializer())
+
+        moving_mean = tf.get_variable('mean', [size], initializer=tf.zeros_initializer(), trainable=False)
+        moving_variance = tf.get_variable('variance', [size], initializer=tf.ones_initializer(), trainable=False)
+
+        def train():
+            mean, variance = tf.nn.moments(x, [0,1,2])
+            update_moving_mean = moving_averages.assign_moving_average(moving_mean, mean, decay)
+            update_moving_variance = moving_averages.assign_moving_average(moving_variance, variance, decay)
+            tf.add_to_collection(tf.GraphKeys.UPDATE_OPS, update_moving_mean)
+            tf.add_to_collection(tf.GraphKeys.UPDATE_OPS, update_moving_variance)
+            return mean, variance
+
+        mean, variance = tf.cond(
+                                 tf.convert_to_tensor(is_training,dtype=tf.bool),
+                                 lambda:train(),
+                                 lambda:(moving_mean, moving_variance)
+                                )
+     
+        inv = math_ops.rsqrt(variance + epsilon)
+        inv *= scale 
+        return x * inv + (beta - mean * inv)
 ##group_norm
 def group_norm(x, eps=1e-5, name='group_norm'):
     with tf.variable_scope(name):
@@ -1068,12 +1101,16 @@ def crelu(x,name='crelu'):
     with tf.variable_scope(name):
         x = tf.concat([x,-x],axis=-1)
         return tf.nn.relu(x)
-def prelu(inputs,name='prelu'):
+#def prelu(inputs,name='prelu'):
+#    with tf.variable_scope(name):
+#        alphas = tf.get_variable("alphas", shape=inputs.get_shape()[-1], dtype=tf.float32, initializer=tf.constant_initializer(0.25))
+#        pos = tf.nn.relu(inputs)
+#        neg = alphas * (inputs-abs(inputs))*0.5
+#        return pos + neg
+def prelu(_x, name='prelu'):
     with tf.variable_scope(name):
-        alphas = tf.get_variable("alphas", shape=inputs.get_shape()[-1], dtype=tf.float32, initializer=tf.constant_initializer(0.25))
-        pos = tf.nn.relu(inputs)
-        neg = alphas * (inputs-abs(inputs))*0.5
-        return pos + neg
+        _alpha = tf.get_variable("prelu", shape=_x.get_shape()[-1], dtype=_x.dtype, initializer=tf.constant_initializer(0.25))
+        return tf.maximum(0.0, _x) + _alpha * tf.minimum(0.0, _x)
 ################################################################################################################
 ################################################################################################################
 ################################################################################################################
@@ -1095,7 +1132,7 @@ if __name__=='__main__':
     anchors = [18,27, 28,75, 49,132, 55,43, 65,227, 84,86, 108,162, 109,288, 162,329, 174,103, 190,212, 245,348, 321,150, 343,256, 372,379]
     max_box_per_image = 60
     min_input_size = 224
-    max_input_size = 352
+    max_input_size = 224
     batch_size = 1
     
     train_ints, valid_ints, labels = create_training_instances(
@@ -1138,6 +1175,7 @@ if __name__=='__main__':
     
     model = CliqueFPN(num_classes=len(labels),
                       num_anchors=5,
+                      batch_size = batch_size,
                       max_box_per_image = max_box_per_image,
                       max_grid=[max_input_size,max_input_size],
                       )
@@ -1165,10 +1203,10 @@ if __name__=='__main__':
                        model.is_training:1.0}
             
             start = time.time()
-            out = sess.run(model.classifier_logits,feed_dict=feed_dict)
+            out = sess.run(model.out,feed_dict=feed_dict)
             print('Spend Time:{}'.format(time.time()-start))
             
-            print(out)
+            print(out.shape)
             
             if batch==0:
                 break
