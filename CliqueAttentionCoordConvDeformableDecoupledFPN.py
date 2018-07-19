@@ -25,8 +25,8 @@ class CliqueFPN():
     def __build(self):
         self.norm = 'batch_norm'#group_norm,batch_norm
         self.activate = 'prelu'#selu,leaky,swish,relu,relu6,prelu
-        self.num_block = {'0':3,'1':4,'2':6,'3':6,'4':6}
-        self.K = {'0':48,'1':48,'2':48,'3':48,'4':48}
+        self.num_block = {'1':6,'2':7,'3':7,'4':7}
+        self.K = {'1':48,'2':48,'3':48,'4':48}
     
         self.__init_global_epoch()
         self.__init_global_step()
@@ -50,14 +50,7 @@ class CliqueFPN():
             x0 = PrimaryConv('PrimaryConv',x,True,self.norm,self.activate,self.is_training)
             #none,none/2,none/2,64
             
-            x = CliqueBlock('CliqueBlock_0',x0,self.num_block['0'],self.K['0'],True,self.norm,self.activate,self.is_training,False)
-            #none,none/2,none/2,K['0']*num_block['0']
-            skip_0 = tf.concat([x0,x],axis=-1)
-            # none,none/2,none/2,K['0']*(num_block['0']+1)
-            x0 = Transition('Transition_0',skip_0,True,self.norm,self.activate,self.is_training)
-            #none,none/4,none/4,K['0']*num_block['0']
-            
-            x = CliqueBlock('CliqueBlock_1',x0,self.num_block['1'],self.K['1'],True,self.norm,self.activate,self.is_training,True)
+            x = CliqueBlock('CliqueBlock_1',x0,self.num_block['1'],self.K['1'],True,self.norm,self.activate,self.is_training,False)
             #none,none/4,none/4,K['1']*num_block['1']
             skip_1 = tf.concat([x0,x],axis=-1)
             # none,none/4,none/4,K['1']*(num_block['1']+1)
@@ -652,7 +645,10 @@ def PrimaryConv(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_t
         x = _conv_block('conv_0',x,64,3,1,'SAME',use_decoupled,norm,activate,is_training)#none,none,none,32
         x = _conv_block('conv_1',x,128,3,2,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
         x = _conv_block('conv_2',x,64,1,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,32
+        
         x = _conv_block('conv_3',x,128,3,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
+        x = _conv_block('conv_3',x,256,3,2,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
+        x = _conv_block('conv_3',x,128,1,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
         
         return x
 ##_B_deform_conv
@@ -872,12 +868,43 @@ def _B_group_conv(name,x,group=4,num_filters=16,kernel_size=1,stride=1,padding='
         x = tf.reshape(x,tf.concat([ [num_012[0]], tf.cast(num_012[1:3]/kernel_size,tf.int32), tf.cast([num_filters],tf.int32)],axis=-1))
         
         return x
+##CoordConv
+def CoordConv(name,x):
+    print('use CoordConv')
+    with tf.variable_scope(name):
+        batch_size_tensor = tf.shape(x)[0]
+        y_dim = tf.shape(x)[1]
+        x_dim = tf.shape(x)[2]
+        xx_ones = tf.ones([batch_size_tensor, x_dim],dtype=tf.int32)
+        xx_ones = tf.expand_dims(xx_ones, -1)
+        xx_range = tf.tile(tf.expand_dims(tf.range(x_dim), 0),[batch_size_tensor, 1])
+        xx_range = tf.expand_dims(xx_range, 1)
+        xx_channel = tf.matmul(xx_ones, xx_range)
+        xx_channel = tf.expand_dims(xx_channel, -1)
+        yy_ones = tf.ones([batch_size_tensor, y_dim],dtype=tf.int32)
+        yy_ones = tf.expand_dims(yy_ones, 1)
+        yy_range = tf.tile(tf.expand_dims(tf.range(y_dim), 0),[batch_size_tensor, 1])
+        yy_range = tf.expand_dims(yy_range, -1)
+        yy_channel = tf.matmul(yy_range, yy_ones)
+        yy_channel = tf.expand_dims(yy_channel, -1)
+        xx_channel = tf.cast(xx_channel, tf.float32) / (x_dim - 1)
+        yy_channel = tf.cast(yy_channel, tf.float32) / (y_dim - 1)
+        xx_channel = xx_channel*2 - 1
+        yy_channel = yy_channel*2 - 1
+        ret = tf.concat([x,xx_channel,yy_channel], axis=-1)
+        
+        if False:
+            rr = tf.sqrt( tf.square(xx_channel-0.5)+ tf.square(yy_channel-0.5) )
+            ret = tf.concat([ret, rr], axis=-1)
+        return ret
 ##Attention
 def Attention(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
         attention = SelfAttention('SelfAttention',x,use_decoupled,norm,activate,is_training)
         weight = SE('SE',x,use_decoupled,norm,activate,is_training)
         x = (x+attention)*(1+weight)
+        
+        x = CoordConv('coordconv',x)
         return x
 ##selfattention
 def SelfAttention(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
