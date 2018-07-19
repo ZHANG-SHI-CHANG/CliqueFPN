@@ -25,7 +25,7 @@ class CliqueFPN():
     def __build(self):
         self.norm = 'batch_norm'#group_norm,batch_norm
         self.activate = 'prelu'#selu,leaky,swish,relu,relu6,prelu
-        self.num_block = {'1':6,'2':7,'3':7,'4':7}
+        self.num_block = {'1':4,'2':6,'3':6,'4':6}
         self.K = {'1':48,'2':48,'3':48,'4':48}
     
         self.__init_global_epoch()
@@ -54,27 +54,28 @@ class CliqueFPN():
             #none,none/4,none/4,K['1']*num_block['1']
             skip_1 = tf.concat([x0,x],axis=-1)
             # none,none/4,none/4,K['1']*(num_block['1']+1)
-            x0 = Transition('Transition_1',skip_1,True,self.norm,self.activate,self.is_training)
+            x0 = Transition('Transition_1',skip_1,True,True,self.norm,self.activate,self.is_training)
             #none,none/8,none/8,K['1']*num_block['1']
             
             x = CliqueBlock('CliqueBlock_2',x0,self.num_block['2'],self.K['2'],True,self.norm,self.activate,self.is_training,True)
             #none,none/8,none/8,K['2']*num_block['2']
             skip_2 = tf.concat([x0,x],axis=-1)
             #none,none/8,none/8,K['2']*(num_block['2']+1)
-            x0 = Transition('Transition_2',skip_2,True,self.norm,self.activate,self.is_training)
+            x0 = Transition('Transition_2',skip_2,True,True,self.norm,self.activate,self.is_training)
             #none,none/16,none/16,K['2']*num_block['2']
             
             x = CliqueBlock('CliqueBlock_3',x0,self.num_block['3'],self.K['3'],True,self.norm,self.activate,self.is_training,True)
             #none,none/16,none/16,K['3']*num_block['3']
             skip_3 = tf.concat([x0,x],axis=-1)
             #none,none/16,none/16,K['3']*(num_block['3']+1)
-            x0 = Transition('Transition_3',skip_3,True,self.norm,self.activate,self.is_training)
+            x0 = Transition('Transition_3',skip_3,True,True,self.norm,self.activate,self.is_training)
             #none,none/32,none/32,K['3']*num_block['3']
             
             x = CliqueBlock('CliqueBlock_4',x0,self.num_block['4'],self.K['4'],True,self.norm,self.activate,self.is_training,True)
             #none,none/32,none/32,K['4']*num_block['4']
             skip_4 = tf.concat([x0,x],axis=-1)
             #none,none/32,none/32,K['4']*(num_block['4']+1)
+            skip_4 = Transition('Transition_4',skip_4,True,False,self.norm,self.activate,self.is_training)
         self.out = skip_3
         
         if Detection_or_Classifier=='classifier':
@@ -604,7 +605,7 @@ def CliqueBlock(name,x,num_block=6,num_filters=80,use_decoupled=True,norm='group
         
         return x + x0
 ##Transition
-def Transition(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
+def Transition(name,x,use_decoupled=True,with_pool=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
         C = x.get_shape().as_list()[-1]
         
@@ -612,7 +613,8 @@ def Transition(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_tr
         
         x = Attention('Attention',x,False,norm,activate,is_training)
         
-        x = tf.nn.max_pool(x,[1,2,2,1],[1,2,2,1],'SAME')
+        if with_pool:
+            x = tf.nn.max_pool(x,[1,2,2,1],[1,2,2,1],'SAME')
 
         return x
 ##Dpp
@@ -647,8 +649,8 @@ def PrimaryConv(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_t
         x = _conv_block('conv_2',x,64,1,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,32
         
         x = _conv_block('conv_3',x,128,3,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
-        x = _conv_block('conv_3',x,256,3,2,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
-        x = _conv_block('conv_3',x,128,1,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
+        x = _conv_block('conv_4',x,256,3,2,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
+        x = _conv_block('conv_5',x,128,1,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
         
         return x
 ##_B_deform_conv
@@ -887,8 +889,8 @@ def CoordConv(name,x):
         yy_range = tf.expand_dims(yy_range, -1)
         yy_channel = tf.matmul(yy_range, yy_ones)
         yy_channel = tf.expand_dims(yy_channel, -1)
-        xx_channel = tf.cast(xx_channel, tf.float32) / (x_dim - 1)
-        yy_channel = tf.cast(yy_channel, tf.float32) / (y_dim - 1)
+        xx_channel = tf.cast(xx_channel, tf.float32) / tf.cast(x_dim - 1, tf.float32)
+        yy_channel = tf.cast(yy_channel, tf.float32) / tf.cast(y_dim - 1, tf.float32)
         xx_channel = xx_channel*2 - 1
         yy_channel = yy_channel*2 - 1
         ret = tf.concat([x,xx_channel,yy_channel], axis=-1)
@@ -900,19 +902,21 @@ def CoordConv(name,x):
 ##Attention
 def Attention(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
-        attention = SelfAttention('SelfAttention',x,use_decoupled,norm,activate,is_training)
-        weight = SE('SE',x,use_decoupled,norm,activate,is_training)
+        attention = SelfAttention('SelfAttention',x,False,norm,activate,is_training)
+        weight = SE('SE',x,False,norm,activate,is_training)
         x = (x+attention)*(1+weight)
         
+        C = x.shape.as_list()[-1]
         x = CoordConv('coordconv',x)
+        x = _B_conv_block('assemble',x,C,1,1,'SAME',False,norm,activate,is_training)
         return x
 ##selfattention
 def SelfAttention(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
         C = x.get_shape().as_list()[-1]
-        f = _B_conv_block('f',x,C//8,1,1,'SAME',use_decoupled,norm,activate,is_training)
-        g = _B_conv_block('g',x,C//8,1,1,'SAME',use_decoupled,norm,activate,is_training)
-        h = _B_conv_block('h',x,C,1,1,'SAME',use_decoupled,norm,activate,is_training)
+        f = _B_conv_block('f',x,C//8,1,1,'SAME',False,norm,activate,is_training)
+        g = _B_conv_block('g',x,C//8,1,1,'SAME',False,norm,activate,is_training)
+        h = _B_conv_block('h',x,C,1,1,'SAME',False,norm,activate,is_training)
         
         s = tf.matmul(tf.reshape(g,[tf.shape(g)[0],-1,tf.shape(g)[-1]]), tf.reshape(f,[tf.shape(f)[0],-1,tf.shape(f)[-1]]), transpose_b=True) # # [bs, N, N]
 
