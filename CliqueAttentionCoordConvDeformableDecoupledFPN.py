@@ -54,28 +54,31 @@ class CliqueFPN():
             #none,none/4,none/4,K['1']*num_block['1']
             skip_1 = tf.concat([x0,x],axis=-1)
             # none,none/4,none/4,K['1']*(num_block['1']+1)
-            x0 = Transition('Transition_1',skip_1,True,True,self.norm,self.activate,self.is_training)
+            skip_1 = Transition('Transition_1',skip_1,True,self.norm,self.activate,self.is_training)
+            x0 = tf.nn.max_pool(skip_1,[1,2,2,1],[1,2,2,1],'SAME')
             #none,none/8,none/8,K['1']*num_block['1']
             
             x = CliqueBlock('CliqueBlock_2',x0,self.num_block['2'],self.K['2'],True,self.norm,self.activate,self.is_training,True)
             #none,none/8,none/8,K['2']*num_block['2']
             skip_2 = tf.concat([x0,x],axis=-1)
             #none,none/8,none/8,K['2']*(num_block['2']+1)
-            x0 = Transition('Transition_2',skip_2,True,True,self.norm,self.activate,self.is_training)
+            skip_2 = Transition('Transition_2',skip_2,True,self.norm,self.activate,self.is_training)
+            x0 = tf.nn.max_pool(skip_2,[1,2,2,1],[1,2,2,1],'SAME')
             #none,none/16,none/16,K['2']*num_block['2']
             
             x = CliqueBlock('CliqueBlock_3',x0,self.num_block['3'],self.K['3'],True,self.norm,self.activate,self.is_training,True)
             #none,none/16,none/16,K['3']*num_block['3']
             skip_3 = tf.concat([x0,x],axis=-1)
             #none,none/16,none/16,K['3']*(num_block['3']+1)
-            x0 = Transition('Transition_3',skip_3,True,True,self.norm,self.activate,self.is_training)
+            skip_3 = Transition('Transition_3',skip_3,True,self.norm,self.activate,self.is_training)
+            x0 = tf.nn.max_pool(skip_3,[1,2,2,1],[1,2,2,1],'SAME')
             #none,none/32,none/32,K['3']*num_block['3']
             
             x = CliqueBlock('CliqueBlock_4',x0,self.num_block['4'],self.K['4'],True,self.norm,self.activate,self.is_training,True)
             #none,none/32,none/32,K['4']*num_block['4']
             skip_4 = tf.concat([x0,x],axis=-1)
             #none,none/32,none/32,K['4']*(num_block['4']+1)
-            skip_4 = Transition('Transition_4',skip_4,True,False,self.norm,self.activate,self.is_training)
+            skip_4 = Transition('Transition_4',skip_4,True,self.norm,self.activate,self.is_training)
         self.out = skip_3
         
         if Detection_or_Classifier=='classifier':
@@ -605,7 +608,7 @@ def CliqueBlock(name,x,num_block=6,num_filters=80,use_decoupled=True,norm='group
         
         return x + x0
 ##Transition
-def Transition(name,x,use_decoupled=True,with_pool=True,norm='group_norm',activate='selu',is_training=True):
+def Transition(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
         C = x.get_shape().as_list()[-1]
         
@@ -613,9 +616,6 @@ def Transition(name,x,use_decoupled=True,with_pool=True,norm='group_norm',activa
         
         x = Attention('Attention',x,False,norm,activate,is_training)
         
-        if with_pool:
-            x = tf.nn.max_pool(x,[1,2,2,1],[1,2,2,1],'SAME')
-
         return x
 ##Dpp
 def Dpp(name,Iq):
