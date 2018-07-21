@@ -23,7 +23,7 @@ class CliqueFPN():
         self.__build()
     
     def __build(self):
-        self.norm = 'group_norm'#group_norm,batch_norm
+        self.norm = 'group_norm'#group_norm,batch_norm,bias
         self.activate = 'prelu'#selu,leaky,swish,relu,relu6,prelu
         self.num_block = {'1':6,'2':7,'3':7,'4':7}#4,6,6,6
         self.K = {'1':48,'2':48,'3':48,'4':48}
@@ -643,14 +643,50 @@ def Dpp(name,Iq):
 def PrimaryConv(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
         #none,none,none,3
-        x = _conv_block('conv_0',x,64,3,1,'SAME',use_decoupled,norm,activate,is_training)#none,none,none,32
-        x = _conv_block('conv_1',x,128,3,2,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
-        x = _conv_block('conv_2',x,64,1,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,32
+        x = _conv_block('conv_0',x,64,3,2,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
         
-        x = _conv_block('conv_3',x,128,3,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
-        x = _conv_block('conv_4',x,256,3,2,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
-        x = _conv_block('conv_5',x,128,1,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
+        x0 = _conv_block('conv_1',x,128,3,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,128
+        x = _conv_block('conv_2',x0,64,1,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,32
+        x = _conv_block('conv_3',x,128,3,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,128
+        x = x0 + x
         
+        x = tf.nn.max_pool(x, [1,2,2,1], [1,2,2,1])#none,none/4,none/4,128
+        
+        return x
+##_atrous_conv_block
+def _atrous_conv_block(name,input,num_filters=16,kernel_size=3,rate=1,padding='SAME',use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
+    with tf.variable_scope(name):
+        w = GetWeight('weight',[kernel_size,kernel_size,input.shape.as_list()[-1],num_filters])
+        x = tf.nn.atrous_conv2d(input,w,rate,padding,'atrous_conv2d')
+        
+        if use_decoupled:
+            pass
+        
+        if norm=='batch_norm':
+            x = bn(x, is_training, name='batch_norm')
+        elif norm=='group_norm':
+            x = group_norm(x,name='groupnorm')
+        elif norm=='bias':
+            b = tf.get_variable('bias',num_filters,tf.float32,initializer=tf.constant_initializer(0.001))
+            x += b
+        else:
+            pass
+        
+        if activate=='leaky': 
+            x = LeakyRelu(x,leak=0.1, name='leaky')
+        elif activate=='selu':
+            x = selu(x,name='selu')
+        elif activate=='swish':
+            x = swish(x,name='swish')
+        elif activate=='relu':
+            x = tf.nn.relu(x,name='relu')
+        elif activate=='relu6':
+            x = tf.nn.relu6(x,name='relu6')
+        elif activate=='prelu':
+            x = prelu(x,name='prelu')
+        else:
+            pass
+
         return x
 ##_B_deform_conv
 def _B_deform_conv(name,x,num_filters=16,kernel_size=3,stride=1,offect=3,padding='SAME',use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
@@ -807,9 +843,11 @@ def _conv_block(name,input,num_filters=16,kernel_size=3,stride=2,padding='SAME',
             x = bn(x, is_training, name='batch_norm')
         elif norm=='group_norm':
             x = group_norm(x,name='groupnorm')
-        else:
+        elif norm=='bias':
             b = tf.get_variable('bias',num_filters,tf.float32,initializer=tf.constant_initializer(0.001))
             x += b
+        else:
+            pass
         
         if activate=='leaky': 
             x = LeakyRelu(x,leak=0.1, name='leaky')
@@ -838,6 +876,9 @@ def _B_group_conv(name,x,group=4,num_filters=16,kernel_size=1,stride=1,padding='
             x = bn(x, is_training, name='batch_norm')
         elif norm=='group_norm':
             x = group_norm(x,name='groupnorm')
+        elif norm=='bias':
+            b = tf.get_variable('bias',num_filters,tf.float32,initializer=tf.constant_initializer(0.001))
+            x += b
         else:
             pass
         
@@ -905,14 +946,11 @@ def Attention(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_tra
         attention = SelfAttention('SelfAttention',x,False,None,activate,is_training)
         weight = SE('SE',x,False,None,activate,is_training)
         x = (x+attention)*(1+weight)
-        
-        C = x.shape.as_list()[-1]
-        x = CoordConv('coordconv',x)
-        x = _B_conv_block('assemble',x,C,1,1,'SAME',False,None,activate,is_training)
         return x
 ##selfattention
 def SelfAttention(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
+        '''
         C = x.get_shape().as_list()[-1]
         f = _B_conv_block('f',x,C//8,1,1,'SAME',use_decoupled,norm,activate,is_training)
         g = _B_conv_block('g',x,C//8,1,1,'SAME',use_decoupled,norm,activate,is_training)
@@ -927,6 +965,17 @@ def SelfAttention(name,x,use_decoupled=True,norm='group_norm',activate='selu',is
 
         o = tf.reshape(o, tf.concat([tf.shape(x)[:3],[-1]],axis=-1)) # [bs, h, w, C]
         x = gamma * o
+        '''
+        C = x.get_shape().as_list()[-1]
+        map = _B_conv_block('map1',x,C//2,1,1,'SAME',use_decoupled,norm,activate,is_training)
+        map = _B_conv_block('map2',map,1,3,1,'SAME',use_decoupled,norm,activate,is_training)
+        map = tf.nn.sigmoid(map)
+        map = CoordConv('coordconv',map)
+        map = _B_conv_block('assemble',map,1,1,1,'SAME',use_decoupled,norm,activate,is_training)
+        x = x*map
+        
+        gamma = tf.get_variable("gamma", [1], initializer=tf.constant_initializer(0.0))
+        x = x*gamma
         
         return x
 ##senet
@@ -970,8 +1019,8 @@ def DecoupledG(name,conv,xnorm,wnorm):#use cos
 def GetWeight(name,shape,weights_decay = 0.00004):
     with tf.variable_scope(name):
         #w = tf.get_variable('weight',shape,tf.float32,initializer=VarianceScaling())
-        #w = tf.get_variable('weight',shape,tf.float32,initializer=glorot_uniform_initializer())
-        w = tf.get_variable('weight',shape,tf.float32,initializer=tf.random_normal_initializer(stddev=tf.sqrt(2.0/tf.to_float(shape[0]*shape[1]*shape[2]))))
+        w = tf.get_variable('weight',shape,tf.float32,initializer=glorot_uniform_initializer())
+        #w = tf.get_variable('weight',shape,tf.float32,initializer=tf.random_normal_initializer(stddev=tf.sqrt(2.0/tf.to_float(shape[0]*shape[1]*shape[2]))))
         
         weight_decay = tf.multiply(tf.nn.l2_loss(w), weights_decay, name='weight_loss')
         tf.add_to_collection('regularzation_loss', weight_decay)
