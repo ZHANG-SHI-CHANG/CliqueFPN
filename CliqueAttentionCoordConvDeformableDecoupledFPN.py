@@ -11,7 +11,7 @@ class CliqueFPN():
     MEAN = [103.94, 116.78, 123.68]
     NORMALIZER = 0.017
     
-    def __init__(self,num_classes,num_anchors,batch_size,max_box_per_image,max_grid,ignore_thresh=0.6,learning_rate=0.0004):
+    def __init__(self,num_classes,num_anchors,batch_size,max_box_per_image,max_grid,ignore_thresh=0.6,learning_rate=0.004):
         self.num_classes = num_classes
         self.num_anchors = num_anchors
         self.batch_size = batch_size
@@ -27,7 +27,7 @@ class CliqueFPN():
         self.activate = 'prelu'#selu,leaky,swish,relu,relu6,prelu
         self.num_block = {'1':6,'2':7,'3':7,'4':7}#4,6,6,6
         self.K = {'1':48,'2':48,'3':48,'4':48}
-        self.use_decoupled = False
+        self.use_decoupled = True
         self.use_deformconv = True
     
         self.__init_global_epoch()
@@ -612,8 +612,7 @@ def Transition(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_tr
         
         x = _B_conv_block('_B_conv_block',x,C//2,1,1,'SAME',use_decoupled,norm,activate,is_training)
         x = tf.nn.max_pool(x,[1,2,2,1],[1,2,2,1],'SAME')
-        
-        x = Attention('Attention',x,False,norm,activate,is_training)
+        x = Attention('Attention',x,False,None,activate,is_training)
         
         return x
 ##Dpp
@@ -643,14 +642,30 @@ def Dpp(name,Iq):
 def PrimaryConv(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
         #none,none,none,3
-        x = _conv_block('conv_0',x,64,3,2,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
+        x0 = _conv_block('conv_0',x,64,3,2,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,64
         
-        x0 = _conv_block('conv_1',x,128,3,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,128
+        x0 = _conv_block('conv_1',x0,128,3,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,128
         x = _conv_block('conv_2',x0,64,1,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,32
         x = _conv_block('conv_3',x,128,3,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,128
-        x = x0 + x
-        
-        x = tf.nn.max_pool(x, [1,2,2,1], [1,2,2,1])#none,none/4,none/4,128
+        x = x + x0
+        '''
+        x0 = _conv_block('conv_0_0',x0,128,3,1,'SAME',use_decoupled,norm,activate,is_training)#none,none/2,none/2,128
+        #1*1_conv+3*3_dilated_1_rate
+        x1 = _conv_block('conv_1',x0,64,1,1,'SAME',False,norm,activate,is_training)
+        x1 = _atrous_conv_block('atrous_conv_1',x1,64,3,1,'SAME',False,norm,activate,is_training)
+        #3*3conv+3*3_dilated_3_rate
+        x2 = _conv_block('conv_2',x0,64,3,1,'SAME',False,norm,activate,is_training)
+        x2 = _atrous_conv_block('atrous_conv_2',x2,64,3,3,'SAME',False,norm,activate,is_training)
+        #5*5conv+3*3_dilated_5_rate->3*3conv+3*3conv+3*3_dilated_5_rate
+        #x3 = _conv_block('conv_3',x0,64,5,1,'SAME',False,norm,activate,is_training)
+        x3 = _conv_block('conv_3',x0,64,3,1,'SAME',False,norm,activate,is_training)
+        x3 = _conv_block('conv_3',x3,64,3,1,'SAME',False,norm,activate,is_training)
+        x3 = _atrous_conv_block('atrous_conv_3',x3,64,3,5,'SAME',False,norm,activate,is_training)
+        x  = tf.concat([x1,x2,x3],axis=-1)
+        x  = _conv_block('conv_4',x,128,1,1,'SAME',False,norm,activate,is_training)
+        x  = x + x0
+        '''
+        x = tf.nn.max_pool(x, [1,2,2,1], [1,2,2,1],'SAME')#none,none/4,none/4,128
         
         return x
 ##_atrous_conv_block
@@ -950,7 +965,7 @@ def Attention(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_tra
 ##selfattention
 def SelfAttention(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
-        '''
+        
         C = x.get_shape().as_list()[-1]
         f = _B_conv_block('f',x,C//8,1,1,'SAME',use_decoupled,norm,activate,is_training)
         g = _B_conv_block('g',x,C//8,1,1,'SAME',use_decoupled,norm,activate,is_training)
@@ -970,13 +985,12 @@ def SelfAttention(name,x,use_decoupled=True,norm='group_norm',activate='selu',is
         map = _B_conv_block('map1',x,C//2,1,1,'SAME',use_decoupled,norm,activate,is_training)
         map = _B_conv_block('map2',map,1,3,1,'SAME',use_decoupled,norm,activate,is_training)
         map = tf.nn.sigmoid(map)
-        map = CoordConv('coordconv',map)
-        map = _B_conv_block('assemble',map,1,1,1,'SAME',use_decoupled,norm,activate,is_training)
+        
         x = x*map
         
         gamma = tf.get_variable("gamma", [1], initializer=tf.constant_initializer(0.0))
         x = x*gamma
-        
+        '''
         return x
 ##senet
 def SE(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
