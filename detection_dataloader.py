@@ -300,8 +300,11 @@ class BatchGenerator():
 
     def _get_net_size(self, idx):
         if idx%10 == 0:
-            net_size = self.downsample*np.random.randint(self.min_net_size/self.downsample, \
-                                                         self.max_net_size/self.downsample+1)
+            #net_size = self.downsample*np.random.randint(self.min_net_size/self.downsample, \
+            #                                             self.max_net_size/self.downsample+1)
+            net_size = 32*np.random.randint(self.min_net_size/32, \
+                                                         self.max_net_size/32+1)
+            
             print("resizing: ", net_size, net_size)
             self.net_h, self.net_w = net_size, net_size
         return self.net_h, self.net_w

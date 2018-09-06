@@ -4,7 +4,7 @@ from tensorflow.python.framework import graph_util
 import numpy as np
 import cv2
 
-from CliqueDecoupledConvFPN import CliqueFPN,Detection_or_Classifier
+from CliqueFPN import CliqueFPN,Detection_or_Classifier
 
 from detection_dataloader import create_training_instances,BatchGenerator
 from classifier_dataloader import DataLoader
@@ -96,7 +96,9 @@ class Train:
             self.dataset_root+'Fish/JPEGImages/',
             'data.pkl',
             '','','',
-            ['heidiao','niyu','lvqimamiantun','hualu','heijun','dalongliuxian','tiaoshiban']
+            ['aeroplane','bicycle','bird','boat','bottle','bus','car','cat','chair','cow','diningtable','dog','horse','motorbike',
+             'person','pottedplant','sheep','sofa','train','tvmonitor']
+            #['heidiao','niyu','lvqimamiantun','hualu','heijun','dalongliuxian','tiaoshiban']
             #['person','head','hand','foot','aeroplane','tvmonitor','train','boat','dog','chair',
             # 'bird','bicycle','bottle','sheep','diningtable','horse','motorbike','sofa','cow',
             # 'car','cat','bus','pottedplant']
@@ -105,7 +107,7 @@ class Train:
                                             instances           = train_ints, 
                                             anchors             = anchors,   
                                             labels              = self.labels,        
-                                            downsample          = 32, # ratio between network input's size and network output's size, 32 for YOLOv3
+                                            downsample          = 16, # ratio between network input's size and network output's size, 32 for YOLOv3
                                             max_box_per_image   = max_box_per_image,
                                             batch_size          = batch_size,
                                             min_net_size        = min_input_size,
@@ -118,7 +120,7 @@ class Train:
                                             instances           = valid_ints, 
                                             anchors             = anchors,   
                                             labels              = self.labels,        
-                                            downsample          = 32, # ratio between network input's size and network output's size, 32 for YOLOv3
+                                            downsample          = 16, # ratio between network input's size and network output's size, 32 for YOLOv3
                                             max_box_per_image   = max_box_per_image,
                                             batch_size          = batch_size,
                                             min_net_size        = min_input_size,

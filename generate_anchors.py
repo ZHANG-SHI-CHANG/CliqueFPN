@@ -98,11 +98,20 @@ def _main_():
          'car','cat','bus','pottedplant']
     )
     '''
+    '''
     train_imgs, train_labels = parse_voc_annotation(
         root+'Fish\\Annotations\\',
         root+'Fish\\JPEGImages\\',
         'data.pkl',
         ['heidiao','niyu','lvqimamiantun','hualu','heijun','dalongliuxian','tiaoshiban']
+    )
+    '''
+    train_imgs, train_labels = parse_voc_annotation(
+        root+'Fish\\Annotations\\',
+        root+'Fish\\JPEGImages\\',
+        'data.pkl',
+        ['aeroplane','bicycle','bird','boat','bottle','bus','car','cat','chair','cow','diningtable','dog','horse','motorbike',
+        'person','pottedplant','sheep','sofa','train','tvmonitor']
     )
     # run k_mean to find the anchors
     annotation_dims = []
