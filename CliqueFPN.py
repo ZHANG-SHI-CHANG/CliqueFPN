@@ -996,12 +996,13 @@ def Attention(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_tra
         C = x.get_shape().as_list()[-1]
         
         x1 = _B_conv_block('x1',x,C,1,1,'SAME',False,norm,activate,is_training)
-        attention = SelfAttention('SelfAttention',x,False,None,activate,is_training)
+        attention = SelfAttention('SelfAttention',x1,False,None,activate,is_training)
         
         x2 = _B_conv_block('x2',x,C,1,1,'SAME',False,norm,activate,is_training)
-        weight = _SE('SE',x,False,None,activate,is_training)
+        #weight = _SE('SE',x2,False,None,activate,is_training)
+        weight = CompetitiveSE('CompetitiveSE',[x,x2],False,None,activate,is_training)
         
-        x = (x1+attention) + (x2+x2*weight)
+        x = (x1+attention) + (x+x2*weight)
         x = _B_conv_block('_B_conv_block',x,C,1,1,'SAME',False,norm,activate,is_training)
         return x
 ##selfattention
