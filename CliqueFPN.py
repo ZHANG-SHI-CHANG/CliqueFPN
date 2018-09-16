@@ -8,9 +8,6 @@ import numpy as np
 Detection_or_Classifier = 'detection'#'detection','classifier'
 
 class CliqueFPN():
-    MEAN = [103.94, 116.78, 123.68]
-    NORMALIZER = 0.017
-    
     def __init__(self,num_classes,num_anchors,batch_size,max_box_per_image,max_grid,ignore_thresh=0.6,learning_rate=0.0001):
         self.num_classes = num_classes
         self.num_anchors = num_anchors
@@ -25,7 +22,7 @@ class CliqueFPN():
     def __build(self):
         self.norm = 'group_norm'#group_norm,batch_norm
         self.activate = 'prelu'#selu,leaky,swish,relu,relu6,prelu
-        self.num_block = {'1':6,'2':7,'3':7,'4':7}#4,6,6,6-6,7,7,7
+        self.num_block = {'1':6,'2':7,'3':7,'4':7}#4,6,6,6 6,7,7,7
         self.K = {'1':48,'2':48,'3':48,'4':48}
         self.use_decoupled = False
         self.use_deformconv = True
@@ -36,10 +33,9 @@ class CliqueFPN():
         
         with tf.variable_scope('zsc_feature'):
             red, green, blue = tf.split(self.input_image, num_or_size_splits=3, axis=3)
-            #x = tf.concat([tf.truediv(tf.subtract(tf.truediv(blue,255.0), 0.485), 0.229),
-            #               tf.truediv(tf.subtract(tf.truediv(green,255.0), 0.456), 0.224),
-            #               tf.truediv(tf.subtract(tf.truediv(red,255.0), 0.406), 0.225)], 3)
-            x = tf.concat([tf.truediv(blue,255.0),tf.truediv(green,255.0),tf.truediv(red,255.0)], 3)
+            x = tf.concat([tf.multiply(tf.subtract(blue,127.5),0.0078125),
+                           tf.multiply(tf.subtract(green,127.5),0.0078125),
+                           tf.multiply(tf.subtract(red,127.5),0.0078125)], 3)
             
             #none,none,none,3
             x0 = PrimaryConv('PrimaryConv',self.input_image,self.use_decoupled,self.norm,self.activate,self.is_training)
@@ -52,7 +48,7 @@ class CliqueFPN():
             x0 = Transition('Transition_1',skip_1,self.use_decoupled,self.norm,self.activate,self.is_training)
             #none,none/8,none/8,K['1']*num_block['1']
             
-            x = CliqueBlock('CliqueBlock_2',x0,self.num_block['2'],self.K['2'],self.use_decoupled,self.norm,self.activate,self.is_training,self.use_deformconv)
+            x = CliqueBlock('CliqueBlock_2',x0,self.num_block['2'],self.K['2'],self.use_decoupled,self.norm,self.activate,self.is_training,False)
             #none,none/8,none/8,K['2']*num_block['2']
             skip_2 = tf.concat([x0,x],axis=-1)
             #none,none/8,none/8,K['2']*(num_block['2']+1)
@@ -489,19 +485,15 @@ class CliqueFPN():
         xywh_scale = tf.exp(true_box_wh) * anchors / net_factor                     #(none,grid_h,grid_w,3,2)
         xywh_scale = tf.expand_dims(2 - xywh_scale[..., 0] * xywh_scale[..., 1], axis=4) #(none,grid_h,grid_w,3,1) 真值框尺寸越小，scale越大
 
-        xy_delta    = scale*3*xywh_mask   * (pred_box_xy-true_box_xy) * xywh_scale                          #(none,grid_h,grid_w,3,2) 计算唯一标记框的预测和真值xy偏差
-        wh_delta    = scale*3*xywh_mask   * (pred_box_wh-true_box_wh) * xywh_scale                          #(none,grid_h,grid_w,3,2) 计算唯一标记框的预测和真值wh偏差
+        xy_delta    = scale*1*xywh_mask   * (pred_box_xy-true_box_xy) * xywh_scale                          #(none,grid_h,grid_w,3,2) 计算唯一标记框的预测和真值xy偏差
+        wh_delta    = scale*1*xywh_mask   * (pred_box_wh-true_box_wh) * xywh_scale                          #(none,grid_h,grid_w,3,2) 计算唯一标记框的预测和真值wh偏差
         conf_delta_obj = scale*5*object_mask*(pred_box_conf-true_box_conf)#(none,grid_h,grid_w,3,1) 计算唯一预测框的置信度偏差
         conf_delta_noobj = 1*no_object_mask*conf_delta*(1.3-1.0*count_noobj/(count+count_noobj))#(none,grid_h,grid_w,3,1) 计算非唯一预测框的置信度偏差
-        class_delta = scale*3*object_mask * tf.expand_dims(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=true_box_class, logits=pred_box_class), 4)
+        #class_delta = scale*1*object_mask * tf.expand_dims(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=true_box_class, logits=pred_box_class), 4)
                                                       #(none,grid_h,grid_w,3,num_classes) 计算唯一标记框的分类偏差
-        #conf_delta_obj = focal_loss(tf.reshape(pred_box_conf,[tf.shape(pred_box_conf)[0],-1,1]),tf.reshape(true_box_conf,[tf.shape(true_box_conf)[0],-1,1]))
-        #conf_delta_obj = 5*object_mask*tf.reshape(conf_delta_obj,tf.concat([tf.shape(pred_box_conf)[:-1],[-1]],axis=-1))
-        #conf_delta_noobj = focal_loss(tf.reshape(conf_delta,[tf.shape(conf_delta)[0],-1,1]),tf.reshape(tf.ones_like(conf_delta),[tf.shape(conf_delta)[0],-1,1]))
-        #conf_delta_noobj = 1*no_object_mask*tf.reshape(conf_delta_noobj,tf.concat([tf.shape(conf_delta)[:-1],[-1]],axis=-1))
-        #class_delta = focal_loss(tf.reshape(pred_box_class,[tf.shape(pred_box_class)[0],-1,self.num_classes]),
-        #                         tf.reshape(tf.one_hot(true_box_class,self.num_classes),[tf.shape(pred_box_class)[0],-1,self.num_classes]))
-        #class_delta = 1*object_mask*tf.reshape(class_delta,tf.concat([tf.shape(pred_box_class)[:-1],[-1]],axis=-1))
+        class_delta = focal_loss(tf.reshape(pred_box_class,[tf.shape(pred_box_class)[0],-1,self.num_classes]),
+                                 tf.reshape(tf.one_hot(true_box_class,self.num_classes),[tf.shape(pred_box_class)[0],-1,self.num_classes]))
+        class_delta = scale*1*object_mask*tf.reshape(class_delta,tf.concat([tf.shape(pred_box_class)[:-1],[-1]],axis=-1))
         
         loss = tf.reduce_sum(tf.square(xy_delta),       list(range(1,5))) + \
                tf.reduce_sum(tf.square(wh_delta),       list(range(1,5))) + \
@@ -628,7 +620,7 @@ def Transition(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_tr
         C = x.get_shape().as_list()[-1]
         
         x = _B_conv_block('_B_conv_block',x,C//2,1,1,'SAME',use_decoupled,norm,activate,is_training)
-        x = Attention('Attention',x,False,None,activate,is_training)
+        x = Attention('Attention',x,use_decoupled,norm,activate,is_training)
         
         return x
 ##Dpp
@@ -681,7 +673,7 @@ def PrimaryConv(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_t
         x  = x + x0
         '''
         
-        x = Attention('Attention',x,False,None,activate,is_training,True)
+        x = Attention('Attention',x,use_decoupled,norm,activate,is_training,True)
         #x = tf.nn.max_pool(x,[1,3,3,1],[1,2,2,1],'SAME')
         
         return x
@@ -997,16 +989,20 @@ def CoordConv(name,x):
 ##Attention
 def Attention(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_training=True,useInPrimary=False):
     with tf.variable_scope(name):
-        attention = SelfAttention('SelfAttention',x,False,None,activate,is_training)
-        #weight = _SE('SE',x,False,None,activate,is_training)
-        
         if useInPrimary:
             x = tf.nn.max_pool(x,[1,3,3,1],[1,2,2,1],'SAME')
         else:
             x = tf.nn.avg_pool(x,[1,2,2,1],[1,2,2,1],'SAME')
-        weight = CompetitiveSE('CompetitiveSE',[x,attention],False,None,activate,is_training)
+        C = x.get_shape().as_list()[-1]
         
-        x = (x+attention)*(1+weight)
+        x1 = _B_conv_block('x1',x,C,1,1,'SAME',False,norm,activate,is_training)
+        attention = SelfAttention('SelfAttention',x,False,None,activate,is_training)
+        
+        x2 = _B_conv_block('x2',x,C,1,1,'SAME',False,norm,activate,is_training)
+        weight = _SE('SE',x,False,None,activate,is_training)
+        
+        x = (x1+attention) + (x2+x2*weight)
+        x = _B_conv_block('_B_conv_block',x,C,1,1,'SAME',False,norm,activate,is_training)
         return x
 ##selfattention
 def SelfAttention(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
@@ -1014,13 +1010,11 @@ def SelfAttention(name,x,use_decoupled=True,norm='group_norm',activate='selu',is
         
         C = x.get_shape().as_list()[-1]
         
-        f = _conv_block('f_compress',x,C//8,1,1,'SAME',use_decoupled,norm,activate,is_training)
-        f = _conv_block('f',f,C//8,3,2,'SAME',use_decoupled,norm,activate,is_training)
+        f = _conv_block('f',x,C//8,1,1,'SAME',use_decoupled,norm,activate,is_training)
         
-        g = _conv_block('g_compress',x,C//8,1,1,'SAME',use_decoupled,norm,activate,is_training)
-        g = _conv_block('g',g,C//8,3,2,'SAME',use_decoupled,norm,activate,is_training)
+        g = _conv_block('g',x,C//8,1,1,'SAME',use_decoupled,norm,activate,is_training)
         
-        h = _conv_block('h',x,C,3,2,'SAME',use_decoupled,norm,activate,is_training)
+        h = _conv_block('h',x,C,1,1,'SAME',use_decoupled,norm,activate,is_training)
         
         s = tf.matmul(tf.reshape(g,[tf.shape(g)[0],-1,tf.shape(g)[-1]]), tf.reshape(f,[tf.shape(f)[0],-1,tf.shape(f)[-1]]), transpose_b=True) # # [bs, N, N]
 
@@ -1045,13 +1039,11 @@ def CompetitiveSE(name,x_list,use_decoupled=True,norm='group_norm',activate='sel
         
         weight_c16 = _conv_block('conv_0',weight_c,C//16,1,1,'SAME',use_decoupled,norm,activate,is_training)
         
-        weight_c1 = _conv_block('conv_1',weight_c16,1,1,1,'SAME',use_decoupled,norm,activate,is_training)
         weight_c = _conv_block('conv_2',weight_c16,C,1,1,'SAME',use_decoupled,norm,activate,is_training)
         
-        weight_c1 = tf.nn.sigmoid(weight_c1)
         weight_c = tf.nn.sigmoid(weight_c)#none,1,1,C
         
-        return weight_c*weight_c1
+        return weight_c
 ##senet
 def _SE(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_training=True):
     with tf.variable_scope(name):
@@ -1062,13 +1054,11 @@ def _SE(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_training=
         
         weight_c16 = _conv_block('conv_0',weight_c,C//16,1,1,'SAME',use_decoupled,norm,activate,is_training)
         
-        weight_c1 = _conv_block('conv_1',weight_c16,1,1,1,'SAME',use_decoupled,norm,activate,is_training)
         weight_c = _conv_block('conv_2',weight_c16,C,1,1,'SAME',use_decoupled,norm,activate,is_training)
         
-        weight_c1 = tf.nn.sigmoid(weight_c1)
         weight_c = tf.nn.sigmoid(weight_c)#none,1,1,C
         
-        return weight_c*weight_c1
+        return weight_c
 ##decoupled conv
 def DecoupledOperator(name,conv,x,w,stride):
     print('use DecoupledOperator')
