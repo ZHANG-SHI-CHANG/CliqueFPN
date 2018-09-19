@@ -489,11 +489,11 @@ class CliqueFPN():
         wh_delta    = scale*1*xywh_mask   * (pred_box_wh-true_box_wh) * xywh_scale                          #(none,grid_h,grid_w,3,2) 计算唯一标记框的预测和真值wh偏差
         conf_delta_obj = scale*5*object_mask*(pred_box_conf-true_box_conf)#(none,grid_h,grid_w,3,1) 计算唯一预测框的置信度偏差
         conf_delta_noobj = 1*no_object_mask*conf_delta*(1.3-1.0*count_noobj/(count+count_noobj))#(none,grid_h,grid_w,3,1) 计算非唯一预测框的置信度偏差
-        #class_delta = scale*1*object_mask * tf.expand_dims(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=true_box_class, logits=pred_box_class), 4)
+        class_delta = scale*1*object_mask * tf.expand_dims(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=true_box_class, logits=pred_box_class), 4)
                                                       #(none,grid_h,grid_w,3,num_classes) 计算唯一标记框的分类偏差
-        class_delta = focal_loss(tf.reshape(pred_box_class,[tf.shape(pred_box_class)[0],-1,self.num_classes]),
-                                 tf.reshape(tf.one_hot(true_box_class,self.num_classes),[tf.shape(pred_box_class)[0],-1,self.num_classes]))
-        class_delta = scale*1*object_mask*tf.reshape(class_delta,tf.concat([tf.shape(pred_box_class)[:-1],[-1]],axis=-1))
+        #class_delta = focal_loss(tf.reshape(pred_box_class,[tf.shape(pred_box_class)[0],-1,self.num_classes]),
+        #                         tf.reshape(tf.one_hot(true_box_class,self.num_classes),[tf.shape(pred_box_class)[0],-1,self.num_classes]))
+        #class_delta = scale*1*object_mask*tf.reshape(class_delta,tf.concat([tf.shape(pred_box_class)[:-1],[-1]],axis=-1))
         
         loss = tf.reduce_sum(tf.square(xy_delta),       list(range(1,5))) + \
                tf.reduce_sum(tf.square(wh_delta),       list(range(1,5))) + \
@@ -611,7 +611,7 @@ def CliqueBlock(name,x,num_block=6,num_filters=80,use_decoupled=True,norm='group
             FeatureList.append(_x)#0,1,2,3,4,5
         x = tf.concat(FeatureList,axis=-1)
         
-        x = x*(1+_SE('Gate',x,False,None,self.activate,self.is_training))
+        x = x*(1+_SE('Gate',x,False,None,activate,is_training))
         
         return x
 ##Transition
@@ -1002,7 +1002,7 @@ def Attention(name,x,use_decoupled=True,norm='group_norm',activate='selu',is_tra
         #weight = _SE('SE',x2,False,None,activate,is_training)
         weight = CompetitiveSE('CompetitiveSE',[x,x2],False,None,activate,is_training)
         
-        x = (x1+attention) + (x+x2*weight)
+        x = tf.concat([x+attention,x+x2*weight],axis=3)
         x = _B_conv_block('_B_conv_block',x,C,1,1,'SAME',False,norm,activate,is_training)
         return x
 ##selfattention
